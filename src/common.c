@@ -483,6 +483,44 @@ void adtsHeader(char *adts_header_buffer, int data_len, int aactype, int frequen
     adts_header_buffer[6] = 0xfc;
     return;
 }
+uint64_t getTimeMs(void){
+#if defined(__linux__) || defined(__linux)
+    struct timeval tv = {0};
+    gettimeofday(&tv, NULL);
+    return ((uint64_t)tv.tv_sec * 1000ULL) + (uint64_t)((tv.tv_usec + 500) / 1000);
+#elif defined(_WIN32) || defined(_WIN64)
+    FILETIME ft;
+    ULARGE_INTEGER uli;
+    GetSystemTimeAsFileTime(&ft);
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    return (uli.QuadPart / 10000ULL) - 11644473600000ULL;
+#endif
+    return 0;
+}
+uint64_t getNtpTimestamp64(void){
+#if defined(__linux__) || defined(__linux)
+    struct timeval tv = {0};
+    const uint64_t ntp_epoch_offset = 2208988800ULL;
+    gettimeofday(&tv, NULL);
+    return (((uint64_t)tv.tv_sec + ntp_epoch_offset) << 32) | ((((uint64_t)tv.tv_usec) << 32) / 1000000ULL);
+#elif defined(_WIN32) || defined(_WIN64)
+    FILETIME ft;
+    ULARGE_INTEGER uli;
+    const uint64_t ntp_epoch_offset = 9435484800ULL;
+    uint64_t total_100ns;
+    uint64_t seconds;
+    uint64_t fraction;
+    GetSystemTimeAsFileTime(&ft);
+    uli.LowPart = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    total_100ns = uli.QuadPart;
+    seconds = (total_100ns / 10000000ULL) + ntp_epoch_offset;
+    fraction = ((total_100ns % 10000000ULL) << 32) / 10000000ULL;
+    return (seconds << 32) | (fraction & 0xffffffffULL);
+#endif
+    return 0;
+}
 // t (rtsp/rtp timestamp, in seconds)=t (collection timestamp, in seconds) * audio and video clock frequency 
 // or t (rtsp/rtp timestamp, in milliseconds)=(collection timestamp, in milliseconds) * (clock frequency/1000)
 uint32_t getTimestamp(uint32_t sample_rate){

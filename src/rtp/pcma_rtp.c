@@ -1,5 +1,5 @@
 #include "rtp.h"
-int rtpSendPCMAFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t sample_rate, int channels, int profile, int sig, char *client_ip, int client_rtp_port)
+int rtpSendPCMAFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t sample_rate, int channels, int profile, int sig, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
 {
     int ret;
     int send_bytes = 0;
@@ -21,6 +21,13 @@ int rtpSendPCMAFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpP
         return -1;
     }
     rtp_packet->rtpHeader.timestamp = getTimestamp(sample_rate);
+    if(rtcp_info != NULL){
+        rtcp_info->rtp_timestamp = rtp_packet->rtpHeader.timestamp;
+        rtcp_info->packet_count = 1;
+        rtcp_info->octet_count = size;
+        rtcp_info->ntp_timestamp = getNtpTimestamp64();
+        rtcp_info->wallclock_ms = getTimeMs();
+    }
     send_bytes += ret;
     rtp_packet->rtpHeader.seq = htons(rtp_packet->rtpHeader.seq);
     rtp_packet->rtpHeader.timestamp = htonl(rtp_packet->rtpHeader.timestamp);

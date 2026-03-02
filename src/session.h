@@ -35,6 +35,14 @@ struct MediaPacket_st
     int64_t size;
     int type; // MEDIA_e
 };
+struct RtcpSenderContext
+{
+    uint32_t packet_count;
+    uint32_t octet_count;
+    uint32_t last_rtp_timestamp;
+    uint64_t last_ntp_timestamp;
+    uint64_t last_sr_time_ms;
+};
 /*Record the data channel and packets of the client*/
 struct clientinfo_st
 {
@@ -50,13 +58,17 @@ struct clientinfo_st
 
     char client_ip[40];
     int client_rtp_port;
+    int client_rtcp_port;
     int client_rtp_port_1;
+    int client_rtcp_port_1;
 
     int transport; // enum TRANSPORT_e
 
     // RTP_OVER_TCP-->rtp sig
     int sig_0; // video
+    int sig_1; // video rtcp
     int sig_2; // audio
+    int sig_3; // audio rtcp
     int playflag;
 
     void (*send_call_back)(void *arg); // Audio and video processing callback function
@@ -66,6 +78,8 @@ struct clientinfo_st
     struct RtpPacket *rtp_packet;   // video 
     struct RtpPacket *rtp_packet_1; // audio
     struct rtp_tcp_header *tcp_header;
+    struct RtcpSenderContext rtcp_video;
+    struct RtcpSenderContext rtcp_audio;
 
     // Circular buffer queue
     // video
@@ -150,8 +164,8 @@ struct MediaPacket_st getFrameFromList2(struct clientinfo_st *clientinfo);
  * @return 0:ok <0:error
  */
 int createClient(struct clientinfo_st *clientinfo, 
-    socket_t client_sock_fd, int sig_0, int sig_2, int ture_of_tcp, /*tcp*/
-    socket_t server_rtp_fd, socket_t server_rtcp_fd, socket_t server_rtp_fd_1, socket_t server_rtcp_fd_1, char *client_ip, int client_rtp_port, int client_rtp_port_1 /*udp*/
+    socket_t client_sock_fd, int sig_0, int sig_1, int sig_2, int sig_3, int ture_of_tcp, /*tcp*/
+    socket_t server_rtp_fd, socket_t server_rtcp_fd, socket_t server_rtp_fd_1, socket_t server_rtcp_fd_1, char *client_ip, int client_rtp_port, int client_rtcp_port, int client_rtp_port_1, int client_rtcp_port_1 /*udp*/
     );
 #ifdef RTSP_FILE_SERVER
 /**
@@ -159,8 +173,8 @@ int createClient(struct clientinfo_st *clientinfo,
  * @return 0:ok <0:error
  */
 int addFileSession(char *path_filename, 
-                socket_t client_sock_fd, int sig_0, int sig_2, int ture_of_tcp, /*tcp*/
-                socket_t server_rtp_fd, socket_t server_rtcp_fd, socket_t server_rtp_fd_1, socket_t server_rtcp_fd_1, char *client_ip, int client_rtp_port, int client_rtp_port_1 /*udp*/
+                socket_t client_sock_fd, int sig_0, int sig_1, int sig_2, int sig_3, int ture_of_tcp, /*tcp*/
+                socket_t server_rtp_fd, socket_t server_rtcp_fd, socket_t server_rtp_fd_1, socket_t server_rtcp_fd_1, char *client_ip, int client_rtp_port, int client_rtcp_port, int client_rtp_port_1, int client_rtcp_port_1 /*udp*/
                 );
 /**
  * delete file session
@@ -216,8 +230,8 @@ int sessionGenerateSDP(char *suffix, char *localIp, char *buffer, int buffer_len
  * @return 0:ok <0:error
  */
 int addClient(char* suffix, 
-            socket_t client_sock_fd, int sig_0, int sig_2, int ture_of_tcp, /*tcp*/
-            char *client_ip, int client_rtp_port,int client_rtp_port_1, /*client udp info*/
+            socket_t client_sock_fd, int sig_0, int sig_1, int sig_2, int sig_3, int ture_of_tcp, /*tcp*/
+            char *client_ip, int client_rtp_port, int client_rtcp_port, int client_rtp_port_1, int client_rtcp_port_1, /*client udp info*/
             socket_t server_udp_socket_rtp, socket_t server_udp_socket_rtcp, socket_t server_udp_socket_rtp_1, socket_t server_udp_socket_rtcp_1 /*udp socket*/
             );
 /**

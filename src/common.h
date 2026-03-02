@@ -120,5 +120,7 @@ int generateSDP(char *file, char *localIp, char *buffer, int buffer_len);
 #endif
 int generateSDPExt(char *localIp, char *buffer, int buffer_len, int video_type, int audio_type, int sample_rate, int profile, int channels);
 void adtsHeader(char *adts_header_buffer, int data_len, int aactype, int frequency, int channels);
+uint64_t getTimeMs(void);
+uint64_t getNtpTimestamp64(void);
 uint32_t getTimestamp(uint32_t sample_rate);
 #endif

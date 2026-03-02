@@ -140,7 +140,7 @@ int handleCmd_DESCRIBE(char *result, int cseq, char *url, char *sdp)
 
     return 0;
 }
-int handleCmd_SETUP_TCP(char *result, int cseq, char *localIp, char *clientIp, int sig_0, char *session)
+int handleCmd_SETUP_TCP(char *result, int cseq, char *localIp, char *clientIp, int sig_0, int sig_1, char *session)
 {
     sprintf(result, "RTSP/1.0 200 OK\r\n"
                     "CSeq: %d\r\n"
@@ -151,12 +151,12 @@ int handleCmd_SETUP_TCP(char *result, int cseq, char *localIp, char *clientIp, i
             clientIp,
             localIp,
             sig_0,
-            sig_0 + 1,
+            sig_1,
             session);
 
     return 0;
 }
-int handleCmd_SETUP_UDP(char *result, int cseq, int clientRtpPort, int serverRtpPort, char *session)
+int handleCmd_SETUP_UDP(char *result, int cseq, int clientRtpPort, int clientRtcpPort, int serverRtpPort, int serverRtcpPort, char *session)
 {
     sprintf(result, "RTSP/1.0 200 OK\r\n"
                     "CSeq: %d\r\n"
@@ -165,9 +165,9 @@ int handleCmd_SETUP_UDP(char *result, int cseq, int clientRtpPort, int serverRtp
                     "\r\n",
             cseq,
             clientRtpPort,
-            clientRtpPort + 1,
+            clientRtcpPort,
             serverRtpPort,
-            serverRtpPort + 1,
+            serverRtcpPort,
             session);
 
     return 0;

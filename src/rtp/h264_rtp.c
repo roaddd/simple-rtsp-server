@@ -1,5 +1,5 @@
 #include "rtp.h"
-int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, uint8_t *frame, uint32_t frame_size, int fps, int sig_0, char *client_ip, int client_rtp_port)
+int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, uint8_t *frame, uint32_t frame_size, int fps, int sig_0, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
 {
     uint8_t nalu_type; // nalu第一个字节
     int send_bytes = 0;
@@ -13,6 +13,13 @@ int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
         return -1;
     }
     rtp_packet->rtpHeader.timestamp = getTimestamp(90000);
+    if(rtcp_info != NULL){
+        rtcp_info->rtp_timestamp = rtp_packet->rtpHeader.timestamp;
+        rtcp_info->packet_count = 0;
+        rtcp_info->octet_count = 0;
+        rtcp_info->ntp_timestamp = getNtpTimestamp64();
+        rtcp_info->wallclock_ms = getTimeMs();
+    }
     if(tcp_header != NULL){
         tcp_header->magic = '$';
         tcp_header->rtp_len16 = 0;
@@ -63,6 +70,10 @@ int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
 
         rtp_packet->rtpHeader.seq++;
         send_bytes += ret;
+        if(rtcp_info != NULL){
+            rtcp_info->packet_count = 1;
+            rtcp_info->octet_count = frame_size;
+        }
     }
     else{ // nalu长度小于最大包场：分片模式
         /*
@@ -149,6 +160,10 @@ int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
             rtp_packet->rtpHeader.seq++;
             send_bytes += ret;
             pos += PTK_RTP_TCP_MAX;
+            if(rtcp_info != NULL){
+                rtcp_info->packet_count++;
+                rtcp_info->octet_count += PTK_RTP_TCP_MAX + 2;
+            }
         }
 
         /* 发送剩余的数据 */
@@ -197,6 +212,10 @@ int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
 
             rtp_packet->rtpHeader.seq++;
             send_bytes += ret;
+            if(rtcp_info != NULL){
+                rtcp_info->packet_count++;
+                rtcp_info->octet_count += remainPktSize + 2;
+            }
         }
         // 所有分包的时间戳都是一样的，时间戳的原则就是，发送一个完整的NALU时间戳才更改，但是不管什么包，序列号持续+1
     }

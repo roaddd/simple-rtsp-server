@@ -182,21 +182,21 @@ void *doClientThd(void *arg)
         else if(!strcmp(request_message.method, "SETUP") && ture_of_rtp_tcp == 0){ // RTP_OVER_UDP
             sscanf(request_message.url, "rtsp://%[^:]:", local_ip);
             if(memcmp(track, "track0", 6) == 0){
-                createRtpSockets(&server_udp_socket_rtp_fd, &server_udp_socket_rtcp_fd, &server_rtp_port, &server_rtp_port);
-                handleCmd_SETUP_UDP(send_buf, cseq, client_rtp_port, server_rtp_port, session_id);
+                createRtpSockets(&server_udp_socket_rtp_fd, &server_udp_socket_rtcp_fd, &server_rtp_port, &server_rtcp_port);
+                handleCmd_SETUP_UDP(send_buf, cseq, client_rtp_port, client_rtcp_port, server_rtp_port, server_rtcp_port, session_id);
             }
             else{
-                createRtpSockets(&server_udp_socket_rtp_1_fd, &server_udp_socket_rtcp_1_fd, &server_rtp_port_1, &server_rtp_port_1);
-                handleCmd_SETUP_UDP(send_buf, cseq, client_rtp_port_1, server_rtp_port_1, session_id);
+                createRtpSockets(&server_udp_socket_rtp_1_fd, &server_udp_socket_rtcp_1_fd, &server_rtp_port_1, &server_rtcp_port_1);
+                handleCmd_SETUP_UDP(send_buf, cseq, client_rtp_port_1, client_rtcp_port_1, server_rtp_port_1, server_rtcp_port_1, session_id);
             }
         }
         else if(!strcmp(request_message.method, "SETUP") && ture_of_rtp_tcp == 1){ // RTP_OVER_TCP
             sscanf(request_message.url, "rtsp://%[^:]:", local_ip);
             if(memcmp(track, "track0", 6) == 0){
-                handleCmd_SETUP_TCP(send_buf, cseq, local_ip, client_ip, sig_0, session_id);
+                handleCmd_SETUP_TCP(send_buf, cseq, local_ip, client_ip, sig_0, sig_1, session_id);
             }
             else{
-                handleCmd_SETUP_TCP(send_buf, cseq, local_ip, client_ip, sig_2, session_id);
+                handleCmd_SETUP_TCP(send_buf, cseq, local_ip, client_ip, sig_2, sig_3, session_id);
             }
         }
         else if(!strcmp(request_message.method, "PLAY")){
@@ -222,7 +222,7 @@ need_more_data:
         pos = total_len;
         used_bytes = 0;
         if(!strcmp(request_message.method, "PLAY")){
-            ret = addClient(suffix, client_sock_fd, sig_0, sig_2, ture_of_rtp_tcp, client_ip, client_rtp_port, client_rtp_port_1,
+            ret = addClient(suffix, client_sock_fd, sig_0, sig_1, sig_2, sig_3, ture_of_rtp_tcp, client_ip, client_rtp_port, client_rtcp_port, client_rtp_port_1, client_rtcp_port_1,
                                 server_udp_socket_rtp_fd, server_udp_socket_rtcp_fd, server_udp_socket_rtp_1_fd, server_udp_socket_rtcp_1_fd);
             if (ret < 0)
                 goto out;

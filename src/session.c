@@ -1,6 +1,7 @@
 #include "session.h"
 
 #define SESSION_DEBUG
+#define RTCP_SR_INTERVAL_MS 5000
 static char mp4Dir[1024];
 static int reloop_flag = 1;
 static mthread_t event_thd;
@@ -15,6 +16,133 @@ static mthread_mutex_t mut_session;
 
 static int sum_client = 0; // Record how many clients are currently connecting to the server in total
 static mthread_mutex_t mut_clientcount;
+static uint32_t generateSsrc(socket_t seed_fd, const void *seed_ptr){
+    static uint32_t ssrc_counter = 0x13572468;
+    uintptr_t ptr_value;
+    uint64_t time_seed;
+    uint32_t ssrc = 0;
+
+#if defined(__linux__) || defined(__linux)
+    FILE *fp = fopen("/dev/urandom", "rb");
+    if(fp != NULL){
+        if(fread(&ssrc, sizeof(ssrc), 1, fp) != 1){
+            ssrc = 0;
+        }
+        fclose(fp);
+    }
+#endif
+
+    ptr_value = (uintptr_t)seed_ptr;
+    time_seed = getTimeMs();
+    if(ssrc == 0){
+        ssrc = (uint32_t)(time_seed ^ (time_seed >> 32));
+    }
+    ssrc ^= (uint32_t)seed_fd;
+    ssrc ^= (uint32_t)ptr_value;
+    ssrc ^= (uint32_t)(ptr_value >> 32);
+    ssrc ^= ssrc_counter;
+    ssrc_counter += 0x9E3779B9U;
+
+    /* Final xorshift mix so nearby seeds still spread across the 32-bit space. */
+    ssrc ^= ssrc << 13;
+    ssrc ^= ssrc >> 17;
+    ssrc ^= ssrc << 5;
+    if(ssrc == 0){
+        ssrc = 0x01020304U ^ ssrc_counter;
+    }
+    return ssrc;
+}
+static int sendRtcpSenderReport(struct clientinfo_st *clientinfo, struct RtcpSenderContext *rtcp_ctx, struct RtpPacket *rtp_packet, socket_t rtcp_fd, int rtcp_channel, int client_rtcp_port){
+    uint8_t rtcp_packet_buffer[28];
+    struct rtp_tcp_header tcp_header;
+    uint32_t value32;
+    int ret;
+
+    if(clientinfo == NULL || rtcp_ctx == NULL || rtp_packet == NULL){
+        return -1;
+    }
+    if(rtcp_ctx->last_ntp_timestamp == 0){
+        return 0;
+    }
+
+    memset(rtcp_packet_buffer, 0, sizeof(rtcp_packet_buffer));
+    rtcp_packet_buffer[0] = (RTP_VESION << 6);
+    rtcp_packet_buffer[1] = 200;
+    rtcp_packet_buffer[2] = 0;
+    rtcp_packet_buffer[3] = 6;
+
+    value32 = htonl(rtp_packet->rtpHeader.ssrc);
+    memcpy(rtcp_packet_buffer + 4, &value32, sizeof(value32));
+    value32 = htonl((uint32_t)(rtcp_ctx->last_ntp_timestamp >> 32));
+    memcpy(rtcp_packet_buffer + 8, &value32, sizeof(value32));
+    value32 = htonl((uint32_t)(rtcp_ctx->last_ntp_timestamp & 0xffffffffULL));
+    memcpy(rtcp_packet_buffer + 12, &value32, sizeof(value32));
+    value32 = htonl(rtcp_ctx->last_rtp_timestamp);
+    memcpy(rtcp_packet_buffer + 16, &value32, sizeof(value32));
+    value32 = htonl(rtcp_ctx->packet_count);
+    memcpy(rtcp_packet_buffer + 20, &value32, sizeof(value32));
+    value32 = htonl(rtcp_ctx->octet_count);
+    memcpy(rtcp_packet_buffer + 24, &value32, sizeof(value32));
+
+    if(clientinfo->transport == RTP_OVER_TCP){
+        if(clientinfo->sd == INVALID_SOCKET || rtcp_channel < 0){
+            return -1;
+        }
+        tcp_header.magic = '$';
+        tcp_header.channel = (uint8_t)rtcp_channel;
+        tcp_header.rtp_len16 = htons((uint16_t)sizeof(rtcp_packet_buffer));
+        ret = sendWithTimeout(clientinfo->sd, (const char *)&tcp_header, sizeof(tcp_header), 0);
+        if(ret <= 0){
+            return -1;
+        }
+        ret = sendWithTimeout(clientinfo->sd, (const char *)rtcp_packet_buffer, sizeof(rtcp_packet_buffer), 0);
+        if(ret <= 0){
+            return -1;
+        }
+        return ret;
+    }
+    if(rtcp_fd == INVALID_SOCKET || client_rtcp_port < 0){
+        return -1;
+    }
+    return sendUDP(rtcp_fd, (const char *)rtcp_packet_buffer, sizeof(rtcp_packet_buffer), clientinfo->client_ip, client_rtcp_port, 0);
+}
+static int maybeSendRtcpSenderReport(struct clientinfo_st *clientinfo, int media_type, struct RtpPacket *rtp_packet, struct RtcpPacketInfo *rtcp_info){
+    struct RtcpSenderContext *rtcp_ctx;
+    socket_t rtcp_fd;
+    int rtcp_channel;
+    int client_rtcp_port;
+
+    if(clientinfo == NULL || rtp_packet == NULL || rtcp_info == NULL){
+        return -1;
+    }
+
+    if(media_type == VIDEO){
+        rtcp_ctx = &clientinfo->rtcp_video;
+        rtcp_fd = clientinfo->udp_sd_rtcp;
+        rtcp_channel = clientinfo->sig_1;
+        client_rtcp_port = clientinfo->client_rtcp_port;
+    }
+    else{
+        rtcp_ctx = &clientinfo->rtcp_audio;
+        rtcp_fd = clientinfo->udp_sd_rtcp_1;
+        rtcp_channel = clientinfo->sig_3;
+        client_rtcp_port = clientinfo->client_rtcp_port_1;
+    }
+
+    rtcp_ctx->packet_count += rtcp_info->packet_count;
+    rtcp_ctx->octet_count += rtcp_info->octet_count;
+    rtcp_ctx->last_rtp_timestamp = rtcp_info->rtp_timestamp;
+    rtcp_ctx->last_ntp_timestamp = rtcp_info->ntp_timestamp;
+
+    if(rtcp_ctx->last_sr_time_ms != 0 && (rtcp_info->wallclock_ms - rtcp_ctx->last_sr_time_ms) < RTCP_SR_INTERVAL_MS){
+        return 0;
+    }
+    if(sendRtcpSenderReport(clientinfo, rtcp_ctx, rtp_packet, rtcp_fd, rtcp_channel, client_rtcp_port) < 0){
+        return -1;
+    }
+    rtcp_ctx->last_sr_time_ms = rtcp_info->wallclock_ms;
+    return 0;
+}
 static int eventAdd(int events, struct clientinfo_st *ev){
     if (ev->sd == INVALID_SOCKET)
         return -1;
@@ -162,28 +290,31 @@ static int sendClientMedia(event_data_ptr_t *event_data){
     int channels;
     int profile;
     int ret;
+    struct RtcpPacketInfo rtcp_info;
     ret = getSessionAudioInfo(clientinfo->session, &sample_rate, &channels, &profile);
     enum AUDIO_e audio_type = getSessionAudioType(clientinfo->session);
     if (fd == clientinfo->sd){ // rtp over tcp
         if(node.type == VIDEO){
+            memset(&rtcp_info, 0, sizeof(rtcp_info));
             switch(video_type){
                 case VIDEO_H264:
-                    ret = rtpSendH264Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, node.data, node.size, 0, clientinfo->sig_0, NULL, -1);
+                    ret = rtpSendH264Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, node.data, node.size, 0, clientinfo->sig_0, NULL, -1, &rtcp_info);
                     break;
                 case VIDEO_H265:
-                    ret = rtpSendH265Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, node.data, node.size, 0, clientinfo->sig_0, NULL, -1);
+                    ret = rtpSendH265Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, node.data, node.size, 0, clientinfo->sig_0, NULL, -1, &rtcp_info);
                     break;
                 default:
                     break;
             }
         }
         else{
+            memset(&rtcp_info, 0, sizeof(rtcp_info));
             switch(audio_type){
                 case AUDIO_AAC:
-                    ret = rtpSendAACFrame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet_1, node.data, node.size, sample_rate, channels, profile, clientinfo->sig_2, NULL, -1);
+                    ret = rtpSendAACFrame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet_1, node.data, node.size, sample_rate, channels, profile, clientinfo->sig_2, NULL, -1, &rtcp_info);
                     break;
                 case AUDIO_PCMA:
-                    ret = rtpSendPCMAFrame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet_1, node.data, node.size, sample_rate, channels, profile, clientinfo->sig_2, NULL, -1);
+                    ret = rtpSendPCMAFrame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet_1, node.data, node.size, sample_rate, channels, profile, clientinfo->sig_2, NULL, -1, &rtcp_info);
                     break;
                 default:
                     break;
@@ -192,24 +323,26 @@ static int sendClientMedia(event_data_ptr_t *event_data){
     }
     else{ // rtp over udp
         if(node.type == VIDEO){
+            memset(&rtcp_info, 0, sizeof(rtcp_info));
             switch(video_type){
                 case VIDEO_H264:
-                    ret = rtpSendH264Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, node.data, node.size, 0, -1, clientinfo->client_ip, clientinfo->client_rtp_port);
+                    ret = rtpSendH264Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, node.data, node.size, 0, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
                     break;
                 case VIDEO_H265:
-                    ret = rtpSendH265Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, node.data, node.size, 0, -1, clientinfo->client_ip, clientinfo->client_rtp_port);
+                    ret = rtpSendH265Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, node.data, node.size, 0, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
                     break;
                 default:
                     break;
             }
         }
         else{
+            memset(&rtcp_info, 0, sizeof(rtcp_info));
             switch(audio_type){
                 case AUDIO_AAC:
-                    ret = rtpSendAACFrame(clientinfo->udp_sd_rtp_1, NULL, clientinfo->rtp_packet_1, node.data, node.size, sample_rate, channels, profile, -1, clientinfo->client_ip, clientinfo->client_rtp_port_1);
+                    ret = rtpSendAACFrame(clientinfo->udp_sd_rtp_1, NULL, clientinfo->rtp_packet_1, node.data, node.size, sample_rate, channels, profile, -1, clientinfo->client_ip, clientinfo->client_rtp_port_1, &rtcp_info);
                     break;
                 case AUDIO_PCMA:
-                    ret = rtpSendPCMAFrame(clientinfo->udp_sd_rtp_1, NULL, clientinfo->rtp_packet_1, node.data, node.size, sample_rate, channels, profile, -1, clientinfo->client_ip, clientinfo->client_rtp_port_1);
+                    ret = rtpSendPCMAFrame(clientinfo->udp_sd_rtp_1, NULL, clientinfo->rtp_packet_1, node.data, node.size, sample_rate, channels, profile, -1, clientinfo->client_ip, clientinfo->client_rtp_port_1, &rtcp_info);
                     break;
                 default:
                     break;
@@ -217,6 +350,9 @@ static int sendClientMedia(event_data_ptr_t *event_data){
         }
     }
     if(ret <= 0){
+        return -1;
+    }
+    if(maybeSendRtcpSenderReport(clientinfo, node.type, node.type == VIDEO ? clientinfo->rtp_packet : clientinfo->rtp_packet_1, &rtcp_info) < 0){
         return -1;
     }
     return 0;
@@ -386,10 +522,14 @@ int initClient(struct session_st *session, struct clientinfo_st *clientinfo)
     }
     memset(clientinfo->client_ip, 0, sizeof(clientinfo->client_ip));
     clientinfo->client_rtp_port = -1;
+    clientinfo->client_rtcp_port = -1;
     clientinfo->client_rtp_port_1 = -1;
+    clientinfo->client_rtcp_port_1 = -1;
     clientinfo->transport = -1;
     clientinfo->sig_0 = -1;
+    clientinfo->sig_1 = -1;
     clientinfo->sig_2 = -1;
+    clientinfo->sig_3 = -1;
     clientinfo->playflag = -1;
 
     clientinfo->send_call_back = NULL;
@@ -399,6 +539,8 @@ int initClient(struct session_st *session, struct clientinfo_st *clientinfo)
     clientinfo->rtp_packet = NULL;
     clientinfo->rtp_packet_1 = NULL;
     clientinfo->tcp_header = NULL;
+    memset(&clientinfo->rtcp_video, 0, sizeof(clientinfo->rtcp_video));
+    memset(&clientinfo->rtcp_audio, 0, sizeof(clientinfo->rtcp_audio));
 
     // video
     mthread_mutex_init(&clientinfo->mut_list, NULL);
@@ -449,10 +591,14 @@ int clearClient(struct clientinfo_st *clientinfo)
     }
     memset(clientinfo->client_ip, 0, sizeof(clientinfo->client_ip));
     clientinfo->client_rtp_port = -1;
+    clientinfo->client_rtcp_port = -1;
     clientinfo->client_rtp_port_1 = -1;
+    clientinfo->client_rtcp_port_1 = -1;
     clientinfo->transport = -1;
     clientinfo->sig_0 = -1;
+    clientinfo->sig_1 = -1;
     clientinfo->sig_2 = -1;
+    clientinfo->sig_3 = -1;
     clientinfo->playflag = -1;
 
     clientinfo->send_call_back = NULL;
@@ -471,6 +617,8 @@ int clearClient(struct clientinfo_st *clientinfo)
         free(clientinfo->tcp_header);
         clientinfo->tcp_header = NULL;
     }
+    memset(&clientinfo->rtcp_video, 0, sizeof(clientinfo->rtcp_video));
+    memset(&clientinfo->rtcp_audio, 0, sizeof(clientinfo->rtcp_audio));
 
     // video
     mthread_mutex_destroy(&clientinfo->mut_list);
@@ -571,10 +719,13 @@ struct MediaPacket_st getFrameFromList2(struct clientinfo_st *clientinfo){
     return node;
 }
 int createClient(struct clientinfo_st *clientinfo, 
-    socket_t client_sock_fd, int sig_0, int sig_2, int ture_of_tcp, /*tcp*/
-    socket_t server_rtp_fd, socket_t server_rtcp_fd, socket_t server_rtp_fd_1, socket_t server_rtcp_fd_1, char *client_ip, int client_rtp_port, int client_rtp_port_1 /*udp*/
+    socket_t client_sock_fd, int sig_0, int sig_1, int sig_2, int sig_3, int ture_of_tcp, /*tcp*/
+    socket_t server_rtp_fd, socket_t server_rtcp_fd, socket_t server_rtp_fd_1, socket_t server_rtcp_fd_1, char *client_ip, int client_rtp_port, int client_rtcp_port, int client_rtp_port_1, int client_rtcp_port_1 /*udp*/
     )
 {
+    uint32_t video_ssrc;
+    uint32_t audio_ssrc;
+
     if((clientinfo == NULL) || (client_sock_fd == INVALID_SOCKET)){
         return -1;
     }
@@ -585,7 +736,9 @@ int createClient(struct clientinfo_st *clientinfo,
     if(ture_of_tcp == 1){
         clientinfo->transport = RTP_OVER_TCP;
         clientinfo->sig_0 = sig_0;
+        clientinfo->sig_1 = sig_1;
         clientinfo->sig_2 = sig_2;
+        clientinfo->sig_3 = sig_3;
     }
     else{
         clientinfo->transport = RTP_OVER_UDP;
@@ -596,14 +749,24 @@ int createClient(struct clientinfo_st *clientinfo,
         clientinfo->udp_sd_rtp_1 = server_rtp_fd_1;
         clientinfo->udp_sd_rtcp_1 = server_rtcp_fd_1;
         clientinfo->client_rtp_port = client_rtp_port;
+        clientinfo->client_rtcp_port = client_rtcp_port;
         clientinfo->client_rtp_port_1 = client_rtp_port_1;
+        clientinfo->client_rtcp_port_1 = client_rtcp_port_1;
     }
     // video
     clientinfo->rtp_packet = (struct RtpPacket *)malloc(VIDEO_DATA_MAX_SIZE);
-    rtpHeaderInit(clientinfo->rtp_packet, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_H26X, 0, 0, 0, 0x88923423);
+    video_ssrc = generateSsrc(client_sock_fd, clientinfo);
+    rtpHeaderInit(clientinfo->rtp_packet, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_H26X, 0, 0, 0, video_ssrc);
     // audio
     clientinfo->rtp_packet_1 = (struct RtpPacket *)malloc(VIDEO_DATA_MAX_SIZE);
-    rtpHeaderInit(clientinfo->rtp_packet_1, 0, 0, 0, RTP_VESION, getSessionAudioType(clientinfo->session) == AUDIO_AAC ? RTP_PAYLOAD_TYPE_AAC : RTP_PAYLOAD_TYPE_PCMA, 0, 0, 0, 0x88923423);
+    audio_ssrc = generateSsrc(client_sock_fd, clientinfo->session);
+    if(audio_ssrc == video_ssrc){
+        audio_ssrc ^= 0x5A5A5A5AU;
+        if(audio_ssrc == 0){
+            audio_ssrc = 0x2468ACE1U;
+        }
+    }
+    rtpHeaderInit(clientinfo->rtp_packet_1, 0, 0, 0, RTP_VESION, getSessionAudioType(clientinfo->session) == AUDIO_AAC ? RTP_PAYLOAD_TYPE_AAC : RTP_PAYLOAD_TYPE_PCMA, 0, 0, 0, audio_ssrc);
 
     clientinfo->tcp_header = malloc(sizeof(struct rtp_tcp_header));
 
@@ -617,6 +780,7 @@ int createClient(struct clientinfo_st *clientinfo,
 }
 static int sendDataToClient(struct clientinfo_st *clientinfo, char *ptr, int ptr_len, int type){
     int ret = 0;
+    struct RtcpPacketInfo rtcp_info;
     enum VIDEO_e video_type = getSessionVideoType(clientinfo->session);
     int sample_rate;
     int channels;
@@ -624,13 +788,14 @@ static int sendDataToClient(struct clientinfo_st *clientinfo, char *ptr, int ptr
     ret = getSessionAudioInfo(clientinfo->session, &sample_rate, &channels, &profile);
     enum AUDIO_e audio_type = getSessionAudioType(clientinfo->session);
     if(type == VIDEO){
+        memset(&rtcp_info, 0, sizeof(rtcp_info));
         if(clientinfo->udp_sd_rtp != INVALID_SOCKET){ // udp
             switch(video_type){
                 case VIDEO_H264:
-                    ret = rtpSendH264Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, ptr, ptr_len, 0, -1, clientinfo->client_ip, clientinfo->client_rtp_port);
+                    ret = rtpSendH264Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, ptr, ptr_len, 0, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
                     break;
                 case VIDEO_H265:
-                    ret = rtpSendH265Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, ptr, ptr_len, 0, -1, clientinfo->client_ip, clientinfo->client_rtp_port);
+                    ret = rtpSendH265Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, ptr, ptr_len, 0, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
                     break;
                 default:
                     break;
@@ -639,10 +804,10 @@ static int sendDataToClient(struct clientinfo_st *clientinfo, char *ptr, int ptr
         else{ // tcp
             switch(video_type){
                 case VIDEO_H264:
-                    ret = rtpSendH264Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, ptr, ptr_len, 0, clientinfo->sig_0, NULL, -1);
+                    ret = rtpSendH264Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, ptr, ptr_len, 0, clientinfo->sig_0, NULL, -1, &rtcp_info);
                     break;
                 case VIDEO_H265:
-                    ret = rtpSendH265Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, ptr, ptr_len, 0, clientinfo->sig_0, NULL, -1);
+                    ret = rtpSendH265Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, ptr, ptr_len, 0, clientinfo->sig_0, NULL, -1, &rtcp_info);
                     break;
                 default:
                     break;
@@ -650,13 +815,14 @@ static int sendDataToClient(struct clientinfo_st *clientinfo, char *ptr, int ptr
         }
     }
     else if(type == AUDIO){
+        memset(&rtcp_info, 0, sizeof(rtcp_info));
         if(clientinfo->udp_sd_rtp_1 != INVALID_SOCKET){ // udp
             switch(audio_type){
                 case AUDIO_AAC:
-                    ret = rtpSendAACFrame(clientinfo->udp_sd_rtp_1, NULL, clientinfo->rtp_packet_1, ptr, ptr_len, sample_rate, channels, profile, -1, clientinfo->client_ip, clientinfo->client_rtp_port_1);
+                    ret = rtpSendAACFrame(clientinfo->udp_sd_rtp_1, NULL, clientinfo->rtp_packet_1, ptr, ptr_len, sample_rate, channels, profile, -1, clientinfo->client_ip, clientinfo->client_rtp_port_1, &rtcp_info);
                     break;
                 case AUDIO_PCMA:
-                    ret = rtpSendPCMAFrame(clientinfo->udp_sd_rtp_1, NULL, clientinfo->rtp_packet_1, ptr, ptr_len, sample_rate, channels, profile, -1, clientinfo->client_ip, clientinfo->client_rtp_port_1);
+                    ret = rtpSendPCMAFrame(clientinfo->udp_sd_rtp_1, NULL, clientinfo->rtp_packet_1, ptr, ptr_len, sample_rate, channels, profile, -1, clientinfo->client_ip, clientinfo->client_rtp_port_1, &rtcp_info);
                     break;
                 default:
                     break;
@@ -665,10 +831,10 @@ static int sendDataToClient(struct clientinfo_st *clientinfo, char *ptr, int ptr
         else{ // tcp
             switch(audio_type){
                 case AUDIO_AAC:
-                    ret = rtpSendAACFrame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet_1, ptr, ptr_len, sample_rate, channels, profile, clientinfo->sig_2, NULL, -1);
+                    ret = rtpSendAACFrame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet_1, ptr, ptr_len, sample_rate, channels, profile, clientinfo->sig_2, NULL, -1, &rtcp_info);
                     break;
                 case AUDIO_PCMA:
-                    ret = rtpSendPCMAFrame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet_1, ptr, ptr_len, sample_rate, channels, profile, clientinfo->sig_2, NULL, -1);
+                    ret = rtpSendPCMAFrame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet_1, ptr, ptr_len, sample_rate, channels, profile, clientinfo->sig_2, NULL, -1, &rtcp_info);
                     break;
                 default:
                     break;
@@ -677,6 +843,11 @@ static int sendDataToClient(struct clientinfo_st *clientinfo, char *ptr, int ptr
     }
     else{
         return -1;
+    }
+    if(ret > 0){
+        if(maybeSendRtcpSenderReport(clientinfo, type, type == VIDEO ? clientinfo->rtp_packet : clientinfo->rtp_packet_1, &rtcp_info) < 0){
+            return -1;
+        }
     }
     return ret;
 }
@@ -733,8 +904,8 @@ static void reloopCallBack(void *arg){
 }
 /*Create a file session and add one client*/
 int addFileSession(char *path_filename, 
-    socket_t client_sock_fd, int sig_0, int sig_2, int ture_of_tcp, /*tcp*/
-    socket_t server_rtp_fd, socket_t server_rtcp_fd, socket_t server_rtp_fd_1, socket_t server_rtcp_fd_1, char *client_ip, int client_rtp_port, int client_rtp_port_1 /*udp*/
+    socket_t client_sock_fd, int sig_0, int sig_1, int sig_2, int sig_3, int ture_of_tcp, /*tcp*/
+    socket_t server_rtp_fd, socket_t server_rtcp_fd, socket_t server_rtp_fd_1, socket_t server_rtcp_fd_1, char *client_ip, int client_rtp_port, int client_rtcp_port, int client_rtp_port_1, int client_rtcp_port_1 /*udp*/
     )
 {
     if(path_filename == NULL){
@@ -772,8 +943,8 @@ int addFileSession(char *path_filename,
     session_arr[pos]->count++;
     // add one client
     createClient(&session_arr[pos]->clientinfo[0], 
-        client_sock_fd, sig_0, sig_2, ture_of_tcp, /*tcp*/
-        server_rtp_fd, server_rtcp_fd,server_rtp_fd_1, server_rtcp_fd_1, client_ip, client_rtp_port, client_rtp_port_1 /*udp*/
+        client_sock_fd, sig_0, sig_1, sig_2, sig_3, ture_of_tcp, /*tcp*/
+        server_rtp_fd, server_rtcp_fd,server_rtp_fd_1, server_rtcp_fd_1, client_ip, client_rtp_port, client_rtcp_port, client_rtp_port_1, client_rtcp_port_1 /*udp*/
         );
     int events = EVENT_ERR|EVENT_RDHUP|EVENT_HUP;
 #ifdef SEND_DATA_EVENT
@@ -1111,14 +1282,14 @@ int sessionGenerateSDP(char *suffix, char *localIp, char *buffer, int buffer_len
 
 /*add one client*/
 int addClient(char* suffix, 
-    socket_t client_sock_fd, int sig_0, int sig_2, int ture_of_tcp, /*tcp*/
-    char *client_ip, int client_rtp_port,int client_rtp_port_1, /*client udp info*/
+    socket_t client_sock_fd, int sig_0, int sig_1, int sig_2, int sig_3, int ture_of_tcp, /*tcp*/
+    char *client_ip, int client_rtp_port, int client_rtcp_port, int client_rtp_port_1, int client_rtcp_port_1, /*client udp info*/
     socket_t server_udp_socket_rtp, socket_t server_udp_socket_rtcp, socket_t server_udp_socket_rtp_1, socket_t server_udp_socket_rtcp_1 /*udp socket*/
     )
 {
 #ifdef SESSION_DEBUG
-    printf("sig_0:%d, sig_2:%d, ture_of_tcp:%d, client_ip:%s, client_rtp_port:%d, client_rtp_port_1:%d, server_udp_socket_rtp:%d server_udp_socket_rtcp:%d server_udp_socket_rtp_1:%d,server_udp_socket_rtcp_1:%d\n",
-           sig_0, sig_2, ture_of_tcp, client_ip, client_rtp_port, client_rtp_port_1, server_udp_socket_rtp, server_udp_socket_rtcp, server_udp_socket_rtp_1, server_udp_socket_rtcp_1);
+    printf("sig_0:%d, sig_1:%d, sig_2:%d, sig_3:%d, ture_of_tcp:%d, client_ip:%s, client_rtp_port:%d, client_rtcp_port:%d, client_rtp_port_1:%d, client_rtcp_port_1:%d, server_udp_socket_rtp:%d server_udp_socket_rtcp:%d server_udp_socket_rtp_1:%d,server_udp_socket_rtcp_1:%d\n",
+           sig_0, sig_1, sig_2, sig_3, ture_of_tcp, client_ip, client_rtp_port, client_rtcp_port, client_rtp_port_1, client_rtcp_port_1, server_udp_socket_rtp, server_udp_socket_rtcp, server_udp_socket_rtp_1, server_udp_socket_rtcp_1);
 #endif
     int istrueflag = 0;
     int pos = 0;
@@ -1145,8 +1316,8 @@ int addClient(char* suffix,
                 return -1;
             }
             createClient(&session_arr[pos]->clientinfo[posofclient], 
-                client_sock_fd, sig_0, sig_2, ture_of_tcp, /*tcp*/
-                server_udp_socket_rtp, server_udp_socket_rtcp,server_udp_socket_rtp_1, server_udp_socket_rtcp_1, client_ip, client_rtp_port, client_rtp_port_1 /*udp*/
+                client_sock_fd, sig_0, sig_1, sig_2, sig_3, ture_of_tcp, /*tcp*/
+                server_udp_socket_rtp, server_udp_socket_rtcp,server_udp_socket_rtp_1, server_udp_socket_rtcp_1, client_ip, client_rtp_port, client_rtcp_port, client_rtp_port_1, client_rtcp_port_1 /*udp*/
                 );
             int events = EVENT_ERR|EVENT_RDHUP|EVENT_HUP;
 #ifdef SEND_DATA_EVENT
@@ -1164,7 +1335,7 @@ int addClient(char* suffix,
     mthread_mutex_unlock(&mut_session);
     if(istrueflag == 0){ // create a new file session, not custom session
 #ifdef RTSP_FILE_SERVER
-        int ret = addFileSession(path_filename, client_sock_fd, sig_0, sig_2, ture_of_tcp, server_udp_socket_rtp, server_udp_socket_rtcp, server_udp_socket_rtp_1, server_udp_socket_rtcp_1, client_ip, client_rtp_port, client_rtp_port_1);
+        int ret = addFileSession(path_filename, client_sock_fd, sig_0, sig_1, sig_2, sig_3, ture_of_tcp, server_udp_socket_rtp, server_udp_socket_rtcp, server_udp_socket_rtp_1, server_udp_socket_rtcp_1, client_ip, client_rtp_port, client_rtcp_port, client_rtp_port_1, client_rtcp_port_1);
         if (ret < 0)
         {
 

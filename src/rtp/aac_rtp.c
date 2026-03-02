@@ -2,7 +2,7 @@
 // char *aac_filename = "test_out.aac";
 // FILE *aac_fd = NULL;
 
-int rtpSendAACFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t sample_rate, int channels, int profile, int sig, char *client_ip, int client_rtp_port)
+int rtpSendAACFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t sample_rate, int channels, int profile, int sig, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
 {
     // if(aac_fd==NULL){
     //     aac_fd = fopen(aac_filename, "wb");
@@ -35,6 +35,13 @@ int rtpSendAACFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPa
         return -1;
     }
     rtp_packet->rtpHeader.timestamp = getTimestamp(sample_rate);
+    if(rtcp_info != NULL){
+        rtcp_info->rtp_timestamp = rtp_packet->rtpHeader.timestamp;
+        rtcp_info->packet_count = 1;
+        rtcp_info->octet_count = size + 4;
+        rtcp_info->ntp_timestamp = getNtpTimestamp64();
+        rtcp_info->wallclock_ms = getTimeMs();
+    }
     send_bytes += ret;
     rtp_packet->rtpHeader.seq = htons(rtp_packet->rtpHeader.seq);
     rtp_packet->rtpHeader.timestamp = htonl(rtp_packet->rtpHeader.timestamp);
