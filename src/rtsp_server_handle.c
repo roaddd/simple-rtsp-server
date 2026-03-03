@@ -22,6 +22,7 @@ void rtspDelSession(void *context){
 int rtspStartServer(int auth, const char *server_ip, int server_port, const char *user, const char *password){
     socket_t server_sock_fd;
     int ret;
+    rtsp_run_flag = 1;
 #if defined(__linux__) || defined(__linux)
     signal(SIGINT, sig_handler);
     signal(SIGQUIT, sig_handler);

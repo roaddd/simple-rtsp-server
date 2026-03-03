@@ -1,6 +1,7 @@
 #ifndef _COMMON_H_
 #define _COMMON_H_
 
+#include "rtsp_server_api.h"
 #include <stdint.h>
 #include <string.h>
 // #define RTSP_FILE_SERVER
@@ -63,18 +64,6 @@ struct rtp_tcp_header
     uint8_t magic;   // $
     uint8_t channel; // 0-1
     uint16_t rtp_len16;
-};
-enum VIDEO_e
-{
-    VIDEO_H264 = 1,
-    VIDEO_H265,
-    VIDEO_NONE,
-};
-enum AUDIO_e
-{
-    AUDIO_AAC = 1,
-    AUDIO_PCMA,
-    AUDIO_NONE,
 };
 typedef struct
 {
