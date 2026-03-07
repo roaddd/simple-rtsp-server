@@ -11,7 +11,7 @@ int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
 
     nalu_type = (frame[0] & 0x7E) >> 1;
     rtp_packet->rtpHeader.marker = 0;
-    memset(rtp_packet->payload, 0, strlen(rtp_packet->payload));
+    memset(rtp_packet->payload, 0, PTK_RTP_TCP_MAX + 3);
 
     rtp_packet->rtpHeader.timestamp = getTimestamp(90000);
     if(rtcp_info != NULL){
@@ -75,7 +75,7 @@ int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
         int i, pos = 2;
 
         for(i = 0; i < pktNum; i++){
-            memset(rtp_packet->payload, 0, strlen(rtp_packet->payload));
+            memset(rtp_packet->payload, 0, PTK_RTP_TCP_MAX + 3);
             rtp_packet->rtpHeader.marker = 0;
             rtp_packet->payload[0] = (frame[0] & 0x81) | (49 << 1);
             rtp_packet->payload[1] = frame[1];
@@ -133,7 +133,7 @@ int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
         }
 
         if(remainPktSize > 0){
-            memset(rtp_packet->payload, 0, strlen(rtp_packet->payload));
+            memset(rtp_packet->payload, 0, PTK_RTP_TCP_MAX + 3);
             rtp_packet->payload[0] = (frame[0] & 0x81) | (49 << 1);
             rtp_packet->payload[1] = frame[1];
             rtp_packet->payload[2] = nalu_type;
