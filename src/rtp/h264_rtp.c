@@ -5,13 +5,12 @@ int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
     int send_bytes = 0;
     int ret;
 
-    nalu_type = frame[0];
-    rtp_packet->rtpHeader.marker = 0;
-    memset(rtp_packet->payload, 0, strlen(rtp_packet->payload));
-
     if(frame == NULL){
         return -1;
     }
+    nalu_type = frame[0];
+    rtp_packet->rtpHeader.marker = 0;
+    memset(rtp_packet->payload, 0, PTK_RTP_TCP_MAX + 2);
     rtp_packet->rtpHeader.timestamp = getTimestamp(90000);
     if(rtcp_info != NULL){
         rtcp_info->rtp_timestamp = rtp_packet->rtpHeader.timestamp;
@@ -106,7 +105,7 @@ int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
 
         /* 发送完整的包 */
         for(i = 0; i < pktNum; i++){
-            memset(rtp_packet->payload, 0, strlen(rtp_packet->payload));
+            memset(rtp_packet->payload, 0, PTK_RTP_TCP_MAX + 2);
             rtp_packet->rtpHeader.marker = 0;
             rtp_packet->payload[0] = (nalu_type & 0xE0) | 28; // F，NRI保持不变，Type设为28(|28)
             // rtp_packet->payload[0] = (nalu_type & 0x60) | 28;
@@ -168,7 +167,7 @@ int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
 
         /* 发送剩余的数据 */
         if(remainPktSize > 0){
-            memset(rtp_packet->payload, 0, strlen(rtp_packet->payload));
+            memset(rtp_packet->payload, 0, PTK_RTP_TCP_MAX + 2);
             rtp_packet->payload[0] = (nalu_type & 0xE0) | 28;
             rtp_packet->payload[1] = nalu_type & 0x1F;
             rtp_packet->payload[1] |= 0x40; // end
