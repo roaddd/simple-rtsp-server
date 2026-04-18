@@ -1303,11 +1303,12 @@ int addClient(char* suffix,
         if(session_arr[i] == NULL){
             continue;
         }
+        /* 找到sessionName对应的session */
         if(!strncmp(session_arr[i]->filename, path_filename, strlen(path_filename))){ // The session exists, add the client to the client queue of the session
             mthread_mutex_lock(&session_arr[i]->mut);
             istrueflag = 1;
             pos = i;
-
+            /* 从session中clientinfo列表里找到还没用的clientinfo索引 */
             int posofclient = get_free_clientinfo(pos);
             if(posofclient < 0){ // Exceeding the maximum number of clients supported by a session, a session can support a maximum of FileMAX (1024) clients
                 printf("over client maxnum\n");
