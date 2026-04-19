@@ -43,6 +43,25 @@ struct RtcpSenderContext
     uint64_t last_ntp_timestamp;
     uint64_t last_sr_time_ms;
 };
+struct RtcpReceiverContext
+{
+    uint64_t packet_count;  // 收到 RTCP 包总数
+    uint64_t rr_count;      // RR 包计数
+    uint64_t sr_count;      // SR 包计数
+    uint64_t sdes_count;    // SDES 包计数
+    uint64_t bye_count;     // BYE 包计数
+
+    uint32_t last_reportee_ssrc; // 最近一次 RR 报告块里的被报告 SSRC
+    uint8_t fraction_lost;       // 分数丢包率(0~255)
+    int32_t cumulative_lost;     // 累计丢包(24-bit signed)
+    uint32_t highest_seq;        // 扩展最高序列号
+    uint32_t jitter;             // 互达抖动
+    uint32_t lsr;                // Last SR middle 32 bits
+    uint32_t dlsr;               // Delay since Last SR
+    uint32_t rtt_ms;             // 估算 RTT(ms)
+
+    uint64_t last_rx_time_ms;    // 最近一次收到 RTCP 的时间戳(ms)
+};
 /*Record the data channel and packets of the client*/
 struct clientinfo_st
 {
@@ -80,6 +99,8 @@ struct clientinfo_st
     struct rtp_tcp_header *tcp_header;
     struct RtcpSenderContext rtcp_video;
     struct RtcpSenderContext rtcp_audio;
+    struct RtcpReceiverContext rtcp_rx_video; // 视频 RTCP 接收统计
+    struct RtcpReceiverContext rtcp_rx_audio; // 音频 RTCP 接收统计
 
     // Circular buffer queue
     // video

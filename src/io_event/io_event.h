@@ -1,3 +1,12 @@
+/*** 
+ * @Author: huangkelong
+ * @Date: 2026-03-02 23:14:35
+ * @LastEditTime: 2026-04-19 10:05:56
+ * @LastEditors: huangkelong
+ * @Description: io事件相关接口定义
+ * @FilePath: \Fork\simple-rtsp-server\src\io_event\io_event.h
+ * @
+ */
 #ifndef _IO_EVENT_H_
 #define _IO_EVENT_H_
 #include <stdio.h>
@@ -19,11 +28,16 @@
 
 #include "mthread.h"
 #include "socket_io.h"
+
+/** 文件描述符类型 */
 typedef enum
 {
-    FD_TYPE_TCP,
-    FD_TYPE_UDP_RTP,
+    FD_TYPE_TCP,      // TCP 控制连接（RTSP 或 RTP-over-TCP）
+    FD_TYPE_UDP_RTP,  // UDP RTP 媒体数据
+    FD_TYPE_UDP_RTCP, // UDP RTCP 反馈数据
 } fd_type_t;
+
+/* 事件数据结构，包含用户数据、文件描述符类型、文件描述符和事件类型。 */
 typedef struct
 {
     void *user_data;
@@ -54,6 +68,7 @@ enum event_type
 };
 typedef int (*event_callback_t)(event_data_ptr_t *);
 
+/* 事件到来后的回调函数 */
 typedef struct {
     event_callback_t event_in;
     event_callback_t event_out;

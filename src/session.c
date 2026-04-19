@@ -1,5 +1,7 @@
 ﻿#include "session.h"
 
+#include "rtcp_feedback.h"
+
 #define SESSION_DEBUG
 #define RTCP_SR_INTERVAL_MS 5000
 static char mp4Dir[1024];
@@ -164,7 +166,7 @@ static int eventAdd(int events, struct clientinfo_st *ev){
         ev->event_data[0] = event_data;
         event_data->user_data = (void *)ev;
         event_data->fd = ev->sd;
-        event_data->fd_type = FD_TYPE_UDP_RTP;
+        event_data->fd_type = FD_TYPE_TCP;
         ev->events = events | EVENT_IN; // client heartbeat(rtsp)
         if(addEvent(ev->events, event_data) < 0){
             return -1;
@@ -181,6 +183,16 @@ static int eventAdd(int events, struct clientinfo_st *ev){
                 return -1;
             }
         }
+        if (ev->udp_sd_rtcp != INVALID_SOCKET){ // video rtcp
+            event_data_ptr_t *event_data = (event_data_ptr_t *)malloc(sizeof(event_data_ptr_t));
+            ev->event_data[2] = event_data;
+            event_data->user_data = (void *)ev;
+            event_data->fd = ev->udp_sd_rtcp;
+            event_data->fd_type = FD_TYPE_UDP_RTCP;
+            if(addEvent(EVENT_IN, event_data) < 0){
+                return -1;
+            }
+        }
         if(ev->udp_sd_rtp_1 != INVALID_SOCKET){ // audio
             event_data_ptr_t *event_data = (event_data_ptr_t *)malloc(sizeof(event_data_ptr_t));
             ev->event_data[3] = event_data;
@@ -189,6 +201,16 @@ static int eventAdd(int events, struct clientinfo_st *ev){
             event_data->fd_type = FD_TYPE_UDP_RTP;
             ev->events = events;
             if(addEvent(ev->events, event_data) < 0){
+                return -1;
+            }
+        }
+        if(ev->udp_sd_rtcp_1 != INVALID_SOCKET){ // audio rtcp
+            event_data_ptr_t *event_data = (event_data_ptr_t *)malloc(sizeof(event_data_ptr_t));
+            ev->event_data[4] = event_data;
+            event_data->user_data = (void *)ev;
+            event_data->fd = ev->udp_sd_rtcp_1;
+            event_data->fd_type = FD_TYPE_UDP_RTCP;
+            if(addEvent(EVENT_IN, event_data) < 0){
                 return -1;
             }
         }
@@ -201,63 +223,273 @@ static int eventAdd(int events, struct clientinfo_st *ev){
  * RTP-over-TCP 模式下，客户端会把控制/RTCP走同一条 TCP。
  * 不读，TCP 接收缓冲会堆满，最终两端阻塞。UDP 没这个“流式背压阻塞”问题，丢包就丢，不会把连接卡死。
  */
-static int handleClientTcpData(event_data_ptr_t *event_data){
+static int charEqIgnoreCase(char a, char b){
+    if(a >= 'A' && a <= 'Z'){
+        a = (char)(a - 'A' + 'a');
+    }
+    if(b >= 'A' && b <= 'Z'){
+        b = (char)(b - 'A' + 'a');
+    }
+    return a == b;
+}
+static int startsWithIgnoreCase(const char *s, int s_len, const char *prefix){
+    int i = 0;
+    int prefix_len = (int)strlen(prefix);
+    if(s == NULL || prefix == NULL || s_len < prefix_len){
+        return 0;
+    }
+    for(i = 0; i < prefix_len; i++){
+        if(!charEqIgnoreCase(s[i], prefix[i])){
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * @description: header 结束检测，返回 header 结束位置（即 body 开始位置），如果没有找到 header 结束标志，则返回 -1
+ * @param {char} *buffer
+ * @param {int} len
+ * @return {*}
+ */
+static int findRtspHeaderEnd(const char *buffer, int len){
+    int i;
+    if(buffer == NULL || len <= 0){
+        return -1;
+    }
+    for(i = 0; i + 3 < len; i++){
+        if(buffer[i] == '\r' && buffer[i + 1] == '\n' && buffer[i + 2] == '\r' && buffer[i + 3] == '\n'){
+            return i + 4;
+        }
+    }
+    for(i = 0; i + 1 < len; i++){
+        if(buffer[i] == '\n' && buffer[i + 1] == '\n'){
+            return i + 2;
+        }
+    }
+    return -1;
+}
+
+/**
+ * @description: 获取 RTSP 消息的 Content-Length,确保 body 收全再处理
+ * @param {char} *buffer
+ * @param {int} header_len
+ * @return {*}
+ */
+static int getRtspContentLength(const char *buffer, int header_len){
+    int i = 0;
+    if(buffer == NULL || header_len <= 0){
+        return 0;
+    }
+    while(i < header_len){
+        int line_start = i;
+        int line_end = i;
+        while(line_end < header_len && buffer[line_end] != '\n'){
+            line_end++;
+        }
+        if(line_end > line_start){
+            int line_len = line_end - line_start;
+            if(line_len > 0 && buffer[line_end - 1] == '\r'){
+                line_len--;
+            }
+            if(startsWithIgnoreCase(buffer + line_start, line_len, "Content-Length")){
+                int colon = line_start;
+                while(colon < line_start + line_len && buffer[colon] != ':'){
+                    colon++;
+                }
+                if(colon < line_start + line_len && buffer[colon] == ':'){
+                    int value = 0;
+                    int pos = colon + 1;
+                    while(pos < line_start + line_len && (buffer[pos] == ' ' || buffer[pos] == '\t')){
+                        pos++;
+                    }
+                    while(pos < line_start + line_len && buffer[pos] >= '0' && buffer[pos] <= '9'){
+                        value = value * 10 + (buffer[pos] - '0');
+                        pos++;
+                    }
+                    return value;
+                }
+            }
+        }
+        i = (line_end < header_len) ? (line_end + 1) : header_len;
+    }
+    return 0;
+}
+static int handleCmd_400(char *result, int cseq){
+    snprintf(result, 4096, "RTSP/1.0 400 Bad Request\r\n"
+                           "CSeq: %d\r\n"
+                           "\r\n", cseq);
+    return 0;
+}
+static int handleCmd_405(char *result, int cseq){
+    snprintf(result, 4096, "RTSP/1.0 405 Method Not Allowed\r\n"
+                           "CSeq: %d\r\n"
+                           "Allow: OPTIONS, GET_PARAMETER, SET_PARAMETER, PLAY, PAUSE, TEARDOWN\r\n"
+                           "\r\n", cseq);
+    return 0;
+}
+
+/**
+ * @description: 分发 RTSP 控制命令
+ * @param {char} *result
+ * @param {rtsp_request_message_st} *request_message
+ * @param {int} cseq
+ * @param {char} *session
+ * @param {int} *need_close
+ * @return {*}
+ */
+static int dispatchRtspControl(char *result, struct rtsp_request_message_st *request_message, int cseq, char *session, int *need_close){
+    if(result == NULL || request_message == NULL || need_close == NULL){
+        return -1;
+    }
+    *need_close = 0;
+    if(strcmp(request_message->method, "OPTIONS") == 0){
+        return handleCmd_OPTIONS(result, cseq);
+    }
+    if(strcmp(request_message->method, "GET_PARAMETER") == 0 || strcmp(request_message->method, "SET_PARAMETER") == 0 || strcmp(request_message->method, "PLAY") == 0 || strcmp(request_message->method, "PAUSE") == 0){
+        return handleCmd_General(result, cseq, session);
+    }
+    if(strcmp(request_message->method, "TEARDOWN") == 0){
+        *need_close = 1;
+        return handleCmd_General(result, cseq, session);
+    }
+    return handleCmd_405(result, cseq);
+}
+
+/**
+ * @description: 统一处理客户端 IO 可读事件
+ * 1) TCP socket: RTSP 控制消息 + RTP/RTCP over TCP($ 交织帧)
+ * 2) UDP RTCP socket: 接收并解析 RTCP 反馈（质量统计）
+ * @param {event_data_ptr_t} *event_data
+ * @return {*}
+ */
+static int handleClientIoData(event_data_ptr_t *event_data){
     struct clientinfo_st *clientinfo = (struct clientinfo_st *)event_data->user_data;
     int type = event_data->fd_type;
     socket_t fd = event_data->fd;
+    int recv_len;
+    int capacity;
+    char buffer_send[4096];
+
     if(clientinfo == NULL){
         return -1;
     }
+    // UDP RTCP 反馈通道：读取一个 RTCP datagram 并更新统计
+    if(type == FD_TYPE_UDP_RTCP && (fd == clientinfo->udp_sd_rtcp || fd == clientinfo->udp_sd_rtcp_1)){
+        char udp_buf[1600];
+        char peer_ip[64] = {0};
+        int peer_port = 0;
+        recv_len = recvUDP(fd, udp_buf, sizeof(udp_buf), peer_ip, &peer_port, 0);
+        if(recv_len > 0){
+            if(fd == clientinfo->udp_sd_rtcp){
+                // 视频 RTCP
+                rtcpHandleUdp(clientinfo, 0, (const uint8_t *)udp_buf, recv_len);
+            }
+            else{
+                // 音频 RTCP
+                rtcpHandleUdp(clientinfo, 1, (const uint8_t *)udp_buf, recv_len);
+            }
+        }
+        return 0;
+    }
     if(fd != clientinfo->sd){
+        return 0;
+    }
+
+    if(clientinfo->len < 0 || clientinfo->len >= (int)sizeof(clientinfo->buffer)){
         return -1;
     }
-    char buffer_send[4096];
-    int recv_len = recvWithTimeout(clientinfo->sd, clientinfo->buffer + clientinfo->pos, sizeof(clientinfo->buffer) - clientinfo->pos, 0);
+    capacity = (int)sizeof(clientinfo->buffer) - clientinfo->pos - 1;
+    if(capacity <= 0){
+        return -1;
+    }
+    recv_len = recvWithTimeout(clientinfo->sd, clientinfo->buffer + clientinfo->pos, capacity, 0);
     if(recv_len <= 0){
         return -1;
     }
     clientinfo->len += recv_len;
     clientinfo->pos = clientinfo->len;
     clientinfo->buffer[clientinfo->len] = 0;
-    if(clientinfo->buffer[0] == '$'){ // RTCP
-        int rtcp_len = 0;
-        if(clientinfo->len >= 4){
-            rtcp_len = (clientinfo->buffer[2] << 8) | clientinfo->buffer[3];
-        }
-        if((clientinfo->len - 4) >= rtcp_len){
-            // skip rtcp data
-            /* TODO:当前收到RTCP数据后直接跳过了，需要进一步处理 */
-            clientinfo->len -= rtcp_len/*RTCP*/ + 4/*rtp tcp header*/;
-            memmove(clientinfo->buffer, clientinfo->buffer + rtcp_len + 4, clientinfo->len);
+
+    while(clientinfo->len > 0){
+        if(clientinfo->buffer[0] == '$'){ // interleaved RTP/RTCP over TCP
+            int rtcp_len;
+            int frame_len;
+            uint8_t channel;
+            if(clientinfo->len < 4){
+                break;
+            }
+            // $ + channel + length(2B) + payload
+            channel = (uint8_t)clientinfo->buffer[1];
+            rtcp_len = ((unsigned char)clientinfo->buffer[2] << 8) | (unsigned char)clientinfo->buffer[3];
+            frame_len = rtcp_len + 4;
+            if(clientinfo->len < frame_len){
+                break;
+            }
+            // 交织通道里的 RTCP 反馈统计
+            rtcpHandleInterleaved(clientinfo, channel, (const uint8_t *)(clientinfo->buffer + 4), rtcp_len);
+            clientinfo->len -= frame_len;
+            if(clientinfo->len > 0){
+                memmove(clientinfo->buffer, clientinfo->buffer + frame_len, clientinfo->len);
+            }
             clientinfo->pos = clientinfo->len;
+            clientinfo->buffer[clientinfo->len] = 0;
+            continue;
         }
-    }
-    else{ // MESSAGE
-        struct rtsp_request_message_st request_message;
-        memset(&request_message, 0, sizeof(struct rtsp_request_message_st));
-        int parse_used = parseRtspRequest(clientinfo->buffer, clientinfo->len, &request_message);
-        if(parse_used < 0){
-            return -1;
-        }
-        char *CSeq = findValueByKey(&request_message, "CSeq");
-        char *Session = findValueByKey(&request_message, "Session");
-        if(CSeq != NULL){
-            int cseq = atoi(CSeq);
-            handleCmd_General(buffer_send, cseq, Session);
-            if(sendWithTimeout(clientinfo->sd, (const char*)buffer_send, strlen(buffer_send), 0) <= 0){
+        else{
+            struct rtsp_request_message_st request_message;
+            int header_len = findRtspHeaderEnd(clientinfo->buffer, clientinfo->len);
+            int body_len;
+            int total_msg_len;
+            int parse_used;
+            int need_close = 0;
+            char *CSeq;
+            char *Session;
+            int cseq;
+
+            if(header_len < 0){
+                break;
+            }
+            // 支持带 body 的 RTSP 控制请求（如 SET_PARAMETER）
+            body_len = getRtspContentLength(clientinfo->buffer, header_len);
+            total_msg_len = header_len + body_len;
+            if(total_msg_len > clientinfo->len){
+                break;
+            }
+
+            memset(&request_message, 0, sizeof(struct rtsp_request_message_st));
+            parse_used = parseRtspRequest(clientinfo->buffer, total_msg_len, &request_message);
+            if(parse_used < 0){
                 return -1;
             }
-            int i;
-            int cnt = clientinfo->len;
-            for(i = 0; i < cnt; i++){ // skip RTSP MESSAGE
-                if(clientinfo->buffer[i] == '$'){
-                    break;
-                }
-                clientinfo->len--;
+
+            CSeq = findValueByKey(&request_message, "CSeq");
+            cseq = (CSeq != NULL) ? atoi(CSeq) : 0;
+            if(CSeq == NULL){
+                handleCmd_400(buffer_send, cseq);
             }
-            memmove(clientinfo->buffer, clientinfo->buffer + i, clientinfo->len);
+            else{
+                Session = findValueByKey(&request_message, "Session");
+                if(dispatchRtspControl(buffer_send, &request_message, cseq, Session, &need_close) < 0){
+                    return -1;
+                }
+            }
+
+            if(sendWithTimeout(clientinfo->sd, (const char*)buffer_send, (int)strlen(buffer_send), 0) <= 0){
+                return -1;
+            }
+
+            clientinfo->len -= total_msg_len;
+            if(clientinfo->len > 0){
+                memmove(clientinfo->buffer, clientinfo->buffer + total_msg_len, clientinfo->len);
+            }
+            clientinfo->pos = clientinfo->len;
+            clientinfo->buffer[clientinfo->len] = 0;
+
+            if(need_close){
+                return -1;
+            }
         }
-        clientinfo->pos = clientinfo->len;
     }
     return 0;
 }
@@ -487,7 +719,7 @@ int moduleInit()
         return -1;
     }
     /* 设置事件回调函数 */
-    setEventCallback(handleClientTcpData, sendClientMedia, delClient);
+    setEventCallback(handleClientIoData, sendClientMedia, delClient);
 
     /* 创建事件循环线程，此时还未添加任何事件 */
     int ret = mthread_create(&event_thd, NULL, startEventLoop, NULL);
@@ -549,6 +781,8 @@ int initClient(struct session_st *session, struct clientinfo_st *clientinfo)
     clientinfo->tcp_header = NULL;
     memset(&clientinfo->rtcp_video, 0, sizeof(clientinfo->rtcp_video));
     memset(&clientinfo->rtcp_audio, 0, sizeof(clientinfo->rtcp_audio));
+    memset(&clientinfo->rtcp_rx_video, 0, sizeof(clientinfo->rtcp_rx_video));
+    memset(&clientinfo->rtcp_rx_audio, 0, sizeof(clientinfo->rtcp_rx_audio));
 
     // video
     mthread_mutex_init(&clientinfo->mut_list, NULL);
@@ -564,6 +798,10 @@ int initClient(struct session_st *session, struct clientinfo_st *clientinfo)
     clientinfo->pos_list_1 = 0;
     clientinfo->packet_num_1 = 0;
     clientinfo->pos_last_packet_1 = 0;
+
+    memset(clientinfo->buffer, 0, sizeof(clientinfo->buffer));
+    clientinfo->len = 0;
+    clientinfo->pos = 0;
     return 0;
 }
 int clearClient(struct clientinfo_st *clientinfo)
@@ -627,6 +865,8 @@ int clearClient(struct clientinfo_st *clientinfo)
     }
     memset(&clientinfo->rtcp_video, 0, sizeof(clientinfo->rtcp_video));
     memset(&clientinfo->rtcp_audio, 0, sizeof(clientinfo->rtcp_audio));
+    memset(&clientinfo->rtcp_rx_video, 0, sizeof(clientinfo->rtcp_rx_video));
+    memset(&clientinfo->rtcp_rx_audio, 0, sizeof(clientinfo->rtcp_rx_audio));
 
     // video
     mthread_mutex_destroy(&clientinfo->mut_list);
@@ -648,6 +888,10 @@ int clearClient(struct clientinfo_st *clientinfo)
     clientinfo->pos_list_1 = 0;
     clientinfo->packet_num_1 = 0;
     clientinfo->pos_last_packet_1 = 0;
+
+    memset(clientinfo->buffer, 0, sizeof(clientinfo->buffer));
+    clientinfo->len = 0;
+    clientinfo->pos = 0;
 
     return 0;
 }

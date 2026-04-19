@@ -1,6 +1,13 @@
 #include "rtsp_client_handle.h"
 #define BUF_MAX_SIZE (4 * 1024)
 #define RTSP_DEBUG
+
+/**
+ * @description: 处理客户端线程，在新客户端 TCP 连接建立后启动，
+ * 负责首轮 RTSP 交互（OPTIONS/DESCRIBE/SETUP/PLAY）、鉴权、解析 Transport、最后调用 addClient(...) 把客户端加入会话
+ * @param {void} *arg
+ * @return {*}
+ */
 void *doClientThd(void *arg)
 {
 #if defined(__linux__) || defined(__linux)
