@@ -60,6 +60,7 @@ int parseRtspRequest(const char *buffer, int len, struct rtsp_request_message_st
         buf_ptr = getLineFromBuf(buf_ptr, buf_ptr_len, line);
         buf_ptr_len -= strlen(line);
         used_bytes += strlen(line);
+        /* 找到了request line */
         if(sscanf(line, "%s %s %s\r\n", request_message->method, request_message->url, request_message->rtsp_version) == 3){ // Skip the previous message 
             break;;
         }

@@ -65,11 +65,11 @@ struct clientinfo_st
     int transport; // enum TRANSPORT_e
 
     // RTP_OVER_TCP-->rtp sig
-    int sig_0; // video
-    int sig_1; // video rtcp
-    int sig_2; // audio
-    int sig_3; // audio rtcp
-    int playflag;
+    int sig_0; // video 视频rtp通道号
+    int sig_1; // video rtcp 视频rtcp通道号
+    int sig_2; // audio 音频rtp通道号
+    int sig_3; // audio rtcp 音频rtcp通道号
+    int playflag; // 0:not play 1:play
 
     void (*send_call_back)(void *arg); // Audio and video processing callback function
     int events;                        // EPOLLIN, EPLLOUT, EPOLLERR ,EPOLLRDHUP
@@ -239,5 +239,6 @@ int addClient(char* suffix,
  * @return client numbers
  */
 int getClientNum();
+int getSessionClientNum(void *context);
 
 #endif

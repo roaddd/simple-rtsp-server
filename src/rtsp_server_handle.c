@@ -96,3 +96,6 @@ int sessionSendVideoData(void *context, uint8_t *data, int data_len){
 int sessionSendAudioData(void *context, uint8_t *data, int data_len){
     return sendAudioData(context, data, data_len);
 }
+int rtspSessionGetClientNum(void *context){
+    return getSessionClientNum(context);
+}

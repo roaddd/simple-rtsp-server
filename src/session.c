@@ -1,4 +1,4 @@
-#include "session.h"
+﻿#include "session.h"
 
 #define SESSION_DEBUG
 #define RTCP_SR_INTERVAL_MS 5000
@@ -197,6 +197,10 @@ static int eventAdd(int events, struct clientinfo_st *ev){
 }
 // handle client heartbeat(rtsp) or TEARDOWN or RTCP(Just care about TCP's RTCP and UDP's direct dropout)
 // TCP data must be processed, otherwise it will block the other end. UDP does not have this problem
+/**
+ * RTP-over-TCP 模式下，客户端会把控制/RTCP走同一条 TCP。
+ * 不读，TCP 接收缓冲会堆满，最终两端阻塞。UDP 没这个“流式背压阻塞”问题，丢包就丢，不会把连接卡死。
+ */
 static int handleClientTcpData(event_data_ptr_t *event_data){
     struct clientinfo_st *clientinfo = (struct clientinfo_st *)event_data->user_data;
     int type = event_data->fd_type;
@@ -222,6 +226,7 @@ static int handleClientTcpData(event_data_ptr_t *event_data){
         }
         if((clientinfo->len - 4) >= rtcp_len){
             // skip rtcp data
+            /* TODO:当前收到RTCP数据后直接跳过了，需要进一步处理 */
             clientinfo->len -= rtcp_len/*RTCP*/ + 4/*rtp tcp header*/;
             memmove(clientinfo->buffer, clientinfo->buffer + rtcp_len + 4, clientinfo->len);
             clientinfo->pos = clientinfo->len;
@@ -481,7 +486,10 @@ int moduleInit()
     if(createEvent() < 0){
         return -1;
     }
+    /* 设置事件回调函数 */
     setEventCallback(handleClientTcpData, sendClientMedia, delClient);
+
+    /* 创建事件循环线程，此时还未添加任何事件 */
     int ret = mthread_create(&event_thd, NULL, startEventLoop, NULL);
     if(ret < 0){
         printf("startEventLoop mthread_create()\n");
@@ -1358,4 +1366,17 @@ int getClientNum()
     sum = sum_client;
     mthread_mutex_unlock(&mut_clientcount);
     return sum;
+}
+
+int getSessionClientNum(void *context)
+{
+    struct session_st *session = (struct session_st *)context;
+    int count;
+    if (session == NULL) {
+        return -1;
+    }
+    mthread_mutex_lock(&session->mut);
+    count = session->count;
+    mthread_mutex_unlock(&session->mut);
+    return count;
 }

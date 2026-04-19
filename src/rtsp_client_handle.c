@@ -182,6 +182,7 @@ void *doClientThd(void *arg)
         else if(!strcmp(request_message.method, "SETUP") && ture_of_rtp_tcp == 0){ // RTP_OVER_UDP
             sscanf(request_message.url, "rtsp://%[^:]:", local_ip);
             if(memcmp(track, "track0", 6) == 0){
+                /* 创建两个 RTP 套接字，并通过 fd1/fd2 返回其描述符，同时把分配的端口号写入 port1 和 port2 */
                 createRtpSockets(&server_udp_socket_rtp_fd, &server_udp_socket_rtcp_fd, &server_rtp_port, &server_rtcp_port);
                 handleCmd_SETUP_UDP(send_buf, cseq, client_rtp_port, client_rtcp_port, server_rtp_port, server_rtcp_port, session_id);
             }
