@@ -1,7 +1,8 @@
 #include "rtp.h"
 int rtpSendPCMAFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t sample_rate, int channels, int profile, int sig, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
 {
-    int ret;
+    /* UDP 模式没有 interleaved header 预发送，ret 必须先归零。 */
+    int ret = 0;
     int send_bytes = 0;
     if(tcp_header != NULL && sig != -1){ // tcp
         tcp_header->magic = '$';

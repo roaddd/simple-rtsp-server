@@ -1224,7 +1224,7 @@ void* addCustomSession(const char* session_name){
                 min_free_pos = i;
             continue;
         }
-        if(!strncmp(session_arr[i]->filename, path_filename, strlen(path_filename))){
+        if(!strcmp(session_arr[i]->filename, path_filename)){
             mthread_mutex_unlock(&mut_session);
             return session_arr[i];
         }
@@ -1474,6 +1474,9 @@ int getSessionVideoType(struct session_st *session){
     return VIDEO_NONE;
 }
 int sessionIsExist(char* suffix){
+    if(suffix == NULL || suffix[0] == '\0'){
+        return 0;
+    }
     char path_filename[1024] = {0};
     memcpy(path_filename, mp4Dir, strlen(mp4Dir));
     memcpy(path_filename + strlen(mp4Dir), suffix, strlen(suffix));
@@ -1482,7 +1485,7 @@ int sessionIsExist(char* suffix){
         if ((session_arr[i] == NULL) || (session_arr[i]->filename == NULL)){
             continue;
         }
-        if (!strncmp(session_arr[i]->filename, path_filename, strlen(path_filename))){
+        if (!strcmp(session_arr[i]->filename, path_filename)){
             mthread_mutex_unlock(&mut_session);
             return 1;
         }
@@ -1500,7 +1503,7 @@ int sessionIsExist(char* suffix){
     return 0;
 }
 int sessionGenerateSDP(char *suffix, char *localIp, char *buffer, int buffer_len){
-    if(suffix == NULL){
+    if(suffix == NULL || suffix[0] == '\0'){
         return -1;
     }
     char path_filename[1024] = {0};
@@ -1511,7 +1514,7 @@ int sessionGenerateSDP(char *suffix, char *localIp, char *buffer, int buffer_len
         if((session_arr[i] == NULL) || (session_arr[i]->filename == NULL)){
             continue;
         }
-        if(!strncmp(session_arr[i]->filename, path_filename, strlen(path_filename))){
+        if(!strcmp(session_arr[i]->filename, path_filename)){
             if(session_arr[i]->is_custom == 0){
 #ifdef RTSP_FILE_SERVER
                 mthread_mutex_unlock(&mut_session);
@@ -1539,9 +1542,13 @@ int addClient(char* suffix,
     socket_t server_udp_socket_rtp, socket_t server_udp_socket_rtcp, socket_t server_udp_socket_rtp_1, socket_t server_udp_socket_rtcp_1 /*udp socket*/
     )
 {
+    if(suffix == NULL || suffix[0] == '\0'){
+        printf("addClient failed: empty suffix\n");
+        return -1;
+    }
 #ifdef SESSION_DEBUG
-    printf("sig_0:%d, sig_1:%d, sig_2:%d, sig_3:%d, ture_of_tcp:%d, client_ip:%s, client_rtp_port:%d, client_rtcp_port:%d, client_rtp_port_1:%d, client_rtcp_port_1:%d, server_udp_socket_rtp:%d server_udp_socket_rtcp:%d server_udp_socket_rtp_1:%d,server_udp_socket_rtcp_1:%d\n",
-           sig_0, sig_1, sig_2, sig_3, ture_of_tcp, client_ip, client_rtp_port, client_rtcp_port, client_rtp_port_1, client_rtcp_port_1, server_udp_socket_rtp, server_udp_socket_rtcp, server_udp_socket_rtp_1, server_udp_socket_rtcp_1);
+    printf("suffix:%s, sig_0:%d, sig_1:%d, sig_2:%d, sig_3:%d, ture_of_tcp:%d, client_ip:%s, client_rtp_port:%d, client_rtcp_port:%d, client_rtp_port_1:%d, client_rtcp_port_1:%d, server_udp_socket_rtp:%d server_udp_socket_rtcp:%d server_udp_socket_rtp_1:%d,server_udp_socket_rtcp_1:%d\n",
+           suffix, sig_0, sig_1, sig_2, sig_3, ture_of_tcp, client_ip, client_rtp_port, client_rtcp_port, client_rtp_port_1, client_rtcp_port_1, server_udp_socket_rtp, server_udp_socket_rtcp, server_udp_socket_rtp_1, server_udp_socket_rtcp_1);
 #endif
     int istrueflag = 0;
     int pos = 0;
@@ -1556,7 +1563,7 @@ int addClient(char* suffix,
             continue;
         }
         /* 找到sessionName对应的session */
-        if(!strncmp(session_arr[i]->filename, path_filename, strlen(path_filename))){ // The session exists, add the client to the client queue of the session
+        if(!strcmp(session_arr[i]->filename, path_filename)){ // The session exists, add the client to the client queue of the session
             mthread_mutex_lock(&session_arr[i]->mut);
             istrueflag = 1;
             pos = i;

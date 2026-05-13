@@ -2,6 +2,64 @@
 #define BUF_MAX_SIZE (4 * 1024)
 #define RTSP_DEBUG
 
+static int parse_rtsp_suffix(const char *url, char *suffix, size_t suffix_size)
+{
+    const char *p;
+    if (!url || !suffix || suffix_size == 0) {
+        return -1;
+    }
+    suffix[0] = '\0';
+    p = strstr(url, "rtsp://");
+    if (!p) {
+        return -1;
+    }
+    p = strchr(p + strlen("rtsp://"), '/');
+    if (!p || !p[1]) {
+        return -1;
+    }
+    strncpy(suffix, p + 1, suffix_size - 1);
+    suffix[suffix_size - 1] = '\0';
+    return 0;
+}
+
+/* SETUP 必须指向具体 track，形如 rtsp://host:port/session/track0。 */
+static int parse_rtsp_setup_url(const char *url,
+                                char *session_name,
+                                size_t session_name_size,
+                                char *track,
+                                size_t track_size)
+{
+    char suffix[512] = {0};
+    char *slash;
+    if (!session_name || session_name_size == 0 || !track || track_size == 0) {
+        return -1;
+    }
+    session_name[0] = '\0';
+    track[0] = '\0';
+    if (parse_rtsp_suffix(url, suffix, sizeof(suffix)) != 0) {
+        return -1;
+    }
+    slash = strrchr(suffix, '/');
+    if (!slash || !slash[1]) {
+        return -1;
+    }
+    *slash = '\0';
+    if (suffix[0] == '\0') {
+        return -1;
+    }
+    strncpy(session_name, suffix, session_name_size - 1);
+    session_name[session_name_size - 1] = '\0';
+    strncpy(track, slash + 1, track_size - 1);
+    track[track_size - 1] = '\0';
+    return 0;
+}
+
+/* 非 track0/track1 的 SETUP 不能默认落到音频，否则会创建错误的 RTP 通道。 */
+static int is_valid_setup_track(const char *track)
+{
+    return track && (!strcmp(track, "track0") || !strcmp(track, "track1"));
+}
+
 /**
  * @description: 处理客户端线程，在新客户端 TCP 连接建立后启动，
  * 负责首轮 RTSP 交互（OPTIONS/DESCRIBE/SETUP/PLAY）、鉴权、解析 Transport、最后调用 addClient(...) 把客户端加入会话
@@ -110,11 +168,23 @@ void *doClientThd(void *arg)
         }
         /* SETUP:RTP_OVER_TCP or RTP_OVER_UDP */
         if(!strcmp(request_message.method, "SETUP")){
-            memset(url_setup, 0, sizeof(url_setup));
             memset(track, 0, sizeof(track));
-            strcpy(url_setup, request_message.url);
-            char *p = strrchr(url_setup, ch);
-            memcpy(track, p + 1, strlen(p)); // video-track0 audio -track1
+            memset(url_setup, 0, sizeof(url_setup));
+            /* 拒绝裸 session SETUP，避免 rtsp://.../live_sub 被误判为 track1。 */
+            if (parse_rtsp_setup_url(request_message.url, suffix, sizeof(suffix), track, sizeof(track)) != 0 ||
+                !is_valid_setup_track(track)) {
+                printf("invalid SETUP url: %s\n", request_message.url);
+                handleCmd_404(send_buf, cseq);
+                goto out;
+            }
+            /* OPTIONS/DESCRIBE 被跳过时，SETUP 仍要独立确认 session 存在。 */
+            ret = sessionIsExist(suffix);
+            if (ret <= 0) {
+                printf("The resource does not exist\n");
+                handleCmd_404(send_buf, cseq);
+                goto out;
+            }
+            findflag = 1;
             char *Transport = findValueByKey(&request_message, "Transport");
             if(Transport == NULL){
                 used_bytes -= parse_used;
@@ -123,7 +193,7 @@ void *doClientThd(void *arg)
 
             if(!strncmp(Transport, "RTP/AVP/TCP", strlen("RTP/AVP/TCP"))){
 
-                if(memcmp(track, "track0", 6) == 0){
+                if(strcmp(track, "track0") == 0){
                     sscanf(Transport, "RTP/AVP/TCP;unicast;interleaved=%d-%d\r\n", &sig_0, &sig_1);
                 }
                 else{
@@ -132,7 +202,7 @@ void *doClientThd(void *arg)
                 ture_of_rtp_tcp = 1;
             }
             else if(!strncmp(Transport, "RTP/AVP/UDP", strlen("RTP/AVP/UDP"))){
-                if(memcmp(track, "track0", 6) == 0){
+                if(strcmp(track, "track0") == 0){
                     sscanf(Transport, "RTP/AVP/UDP;unicast;client_port=%d-%d\r\n", &client_rtp_port, &client_rtcp_port);
                 }
                 else{
@@ -141,7 +211,7 @@ void *doClientThd(void *arg)
             }
             else if(!strncmp(Transport, "RTP/AVP", strlen("RTP/AVP"))){
 
-                if(memcmp(track, "track0", 6) == 0){
+                if(strcmp(track, "track0") == 0){
                     sscanf(Transport, "RTP/AVP;unicast;client_port=%d-%d\r\n", &client_rtp_port, &client_rtcp_port);
                 }
                 else{
@@ -151,8 +221,10 @@ void *doClientThd(void *arg)
         
         }
         if(!strcmp(request_message.method, "OPTIONS")){
-            char *p = strchr(request_message.url + strlen("rtsp://"), ch);
-            memcpy(suffix, p + 1, strlen(p));
+            if (parse_rtsp_suffix(request_message.url, suffix, sizeof(suffix)) != 0) {
+                handleCmd_404(send_buf, cseq);
+                goto out;
+            }
             ret = sessionIsExist(suffix);
             findflag = 1;
             if(ret <= 0){ // The resource does not exist
@@ -166,8 +238,10 @@ void *doClientThd(void *arg)
         }
         else if(!strcmp(request_message.method, "DESCRIBE")){
             if(findflag == 0){
-                char *p = strchr(request_message.url + strlen("rtsp://"), ch);
-                memcpy(suffix, p + 1, strlen(p));
+                if (parse_rtsp_suffix(request_message.url, suffix, sizeof(suffix)) != 0) {
+                    handleCmd_404(send_buf, cseq);
+                    goto out;
+                }
                 ret = sessionIsExist(suffix);
                 if (ret <= 0){ // The resource does not exist
                     printf("The resource does not exist\n");
@@ -188,7 +262,7 @@ void *doClientThd(void *arg)
         }
         else if(!strcmp(request_message.method, "SETUP") && ture_of_rtp_tcp == 0){ // RTP_OVER_UDP
             sscanf(request_message.url, "rtsp://%[^:]:", local_ip);
-            if(memcmp(track, "track0", 6) == 0){
+            if(strcmp(track, "track0") == 0){
                 /* 创建两个 RTP 套接字，并通过 fd1/fd2 返回其描述符，同时把分配的端口号写入 port1 和 port2 */
                 createRtpSockets(&server_udp_socket_rtp_fd, &server_udp_socket_rtcp_fd, &server_rtp_port, &server_rtcp_port);
                 handleCmd_SETUP_UDP(send_buf, cseq, client_rtp_port, client_rtcp_port, server_rtp_port, server_rtcp_port, session_id);
@@ -200,7 +274,7 @@ void *doClientThd(void *arg)
         }
         else if(!strcmp(request_message.method, "SETUP") && ture_of_rtp_tcp == 1){ // RTP_OVER_TCP
             sscanf(request_message.url, "rtsp://%[^:]:", local_ip);
-            if(memcmp(track, "track0", 6) == 0){
+            if(strcmp(track, "track0") == 0){
                 handleCmd_SETUP_TCP(send_buf, cseq, local_ip, client_ip, sig_0, sig_1, session_id);
             }
             else{
@@ -211,6 +285,12 @@ void *doClientThd(void *arg)
             memset(url_play, 0, sizeof(url_play));
             memset(track, 0, sizeof(track));
             strcpy(url_play, request_message.url);
+            if (parse_rtsp_suffix(request_message.url, suffix, sizeof(suffix)) != 0 ||
+                sessionIsExist(suffix) <= 0) {
+                printf("invalid PLAY url: %s\n", request_message.url);
+                handleCmd_404(send_buf, cseq);
+                goto out;
+            }
             handleCmd_PLAY(send_buf, cseq, url_play, session_id);
         }
         else{
@@ -230,6 +310,10 @@ need_more_data:
         pos = total_len;
         used_bytes = 0;
         if(!strcmp(request_message.method, "PLAY")){
+            if (suffix[0] == '\0') {
+                printf("invalid PLAY session: empty suffix\n");
+                goto out;
+            }
             ret = addClient(suffix, client_sock_fd, sig_0, sig_1, sig_2, sig_3, ture_of_rtp_tcp, client_ip, client_rtp_port, client_rtcp_port, client_rtp_port_1, client_rtcp_port_1,
                                 server_udp_socket_rtp_fd, server_udp_socket_rtcp_fd, server_udp_socket_rtp_1_fd, server_udp_socket_rtcp_1_fd);
             if (ret < 0)
