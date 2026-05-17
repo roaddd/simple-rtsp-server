@@ -1,6 +1,7 @@
 ﻿#include "session.h"
 
 #include "rtcp_feedback.h"
+#include "logger.h"
 
 #define SESSION_DEBUG
 #define RTCP_SR_INTERVAL_MS 5000
@@ -535,23 +536,49 @@ static int sendQueuedMediaFromEvent(event_data_ptr_t *event_data){
 }
 static int eventDel(struct clientinfo_st *ev)
 {
-    if(ev->sd == INVALID_SOCKET)
+    if(ev == NULL){
+        LOG_ERROR("[CLIENT_EVENT_DEL] clientinfo is null");
         return -1;
+    }
+    LOG_INFO("[CLIENT_EVENT_DEL] begin client=%p session=%p sd=%d udp_rtp=%d udp_rtcp=%d udp_rtp_1=%d udp_rtcp_1=%d",
+             ev, ev->session, ev->sd, ev->udp_sd_rtp, ev->udp_sd_rtcp, ev->udp_sd_rtp_1, ev->udp_sd_rtcp_1);
+    if(ev->sd == INVALID_SOCKET){
+        LOG_WARN("[CLIENT_EVENT_DEL] skip invalid tcp sd client=%p session=%p", ev, ev->session);
+        return -1;
+    }
     for(int i = 0; i < sizeof(ev->event_data) / sizeof(ev->event_data[0]); i++){
         if(ev->event_data[i] != NULL){
+            LOG_INFO("[CLIENT_EVENT_DEL] del slot=%d event_data=%p fd=%d fd_type=%d events=0x%x user_data=%p client=%p",
+                     i, ev->event_data[i], ev->event_data[i]->fd, ev->event_data[i]->fd_type,
+                     ev->event_data[i]->events, ev->event_data[i]->user_data, ev);
             if(delEvent(ev->event_data[i]) < 0){
+                LOG_ERROR("[CLIENT_EVENT_DEL] del failed slot=%d event_data=%p client=%p",
+                          i, ev->event_data[i], ev);
                 return -1;
             }
         }
     }
+    LOG_INFO("[CLIENT_EVENT_DEL] end client=%p session=%p", ev, ev->session);
     return 0;
 }
 static int delClient(event_data_ptr_t *event_data){
-    struct clientinfo_st *clientinfo = (struct clientinfo_st *)event_data->user_data;
-    if(clientinfo == NULL || clientinfo->sd == INVALID_SOCKET){
+    if(event_data == NULL){
+        LOG_ERROR("[CLIENT_DEL] event_data is null");
         return -1;
     }
+    LOG_WARN("[CLIENT_DEL] begin event_data=%p fd=%d fd_type=%d events=0x%x user_data=%p",
+             event_data, event_data->fd, event_data->fd_type, event_data->events, event_data->user_data);
+    struct clientinfo_st *clientinfo = (struct clientinfo_st *)event_data->user_data;
+    if(clientinfo == NULL || clientinfo->sd == INVALID_SOCKET){
+        LOG_WARN("[CLIENT_DEL] invalid client event_data=%p client=%p",
+                 event_data, clientinfo);
+        return -1;
+    }
+    LOG_WARN("[CLIENT_DEL] client found client=%p session=%p sd=%d session_count=%d",
+             clientinfo, clientinfo->session, clientinfo->sd,
+             clientinfo->session ? clientinfo->session->count : -1);
     if(eventDel(clientinfo) < 0){ // Delete all listening sockets(TCP/UDP)
+        LOG_ERROR("[CLIENT_DEL] eventDel failed client=%p event_data=%p", clientinfo, event_data);
         return -1;
     }
 #ifdef SESSION_DEBUG
@@ -559,11 +586,15 @@ static int delClient(event_data_ptr_t *event_data){
 #endif
     struct session_st *session = clientinfo->session;
     int count = 0;
+    LOG_WARN("[CLIENT_DEL] clearClient begin client=%p session=%p sd=%d",
+             clientinfo, session, clientinfo->sd);
     mthread_mutex_lock(&clientinfo->session->mut);
     clearClient(clientinfo);
     session->count--;
     count = session->count;
     mthread_mutex_unlock(&clientinfo->session->mut);
+    LOG_WARN("[CLIENT_DEL] clearClient end client=%p session=%p session_count=%d",
+             clientinfo, session, count);
     /*Change the total number of customer connections*/
     mthread_mutex_lock(&mut_clientcount);
     sum_client--;
@@ -578,6 +609,8 @@ static int delClient(event_data_ptr_t *event_data){
 #endif
         }
     }
+    LOG_WARN("[CLIENT_DEL] end client=%p session=%p count=%d sum_client=%d",
+             clientinfo, session, count, sum_client);
     return 0;
 }
 #ifdef RTSP_FILE_SERVER
@@ -744,34 +777,48 @@ int initClient(struct session_st *session, struct clientinfo_st *clientinfo)
 int clearClient(struct clientinfo_st *clientinfo)
 {
     if(clientinfo == NULL){
+        LOG_ERROR("[CLIENT_CLEAR] clientinfo is null");
         return -1;
     }
+    LOG_WARN("[CLIENT_CLEAR] begin client=%p session=%p sd=%d udp_rtp=%d udp_rtcp=%d udp_rtp_1=%d udp_rtcp_1=%d",
+             clientinfo, clientinfo->session, clientinfo->sd, clientinfo->udp_sd_rtp,
+             clientinfo->udp_sd_rtcp, clientinfo->udp_sd_rtp_1, clientinfo->udp_sd_rtcp_1);
     if(clientinfo->sd != INVALID_SOCKET){
+        LOG_INFO("[CLIENT_CLEAR] close tcp fd=%d client=%p", clientinfo->sd, clientinfo);
         closeSocket(clientinfo->sd);
         clientinfo->sd = INVALID_SOCKET;
     }
     if(clientinfo->udp_sd_rtp != INVALID_SOCKET){
+        LOG_INFO("[CLIENT_CLEAR] close video_rtp fd=%d client=%p", clientinfo->udp_sd_rtp, clientinfo);
         closeSocket(clientinfo->udp_sd_rtp);
         clientinfo->udp_sd_rtp = INVALID_SOCKET;
     }
     if(clientinfo->udp_sd_rtcp != INVALID_SOCKET){
+        LOG_INFO("[CLIENT_CLEAR] close video_rtcp fd=%d client=%p", clientinfo->udp_sd_rtcp, clientinfo);
         closeSocket(clientinfo->udp_sd_rtcp);
         clientinfo->udp_sd_rtcp = INVALID_SOCKET;
     }
     if(clientinfo->udp_sd_rtp_1 != INVALID_SOCKET){
+        LOG_INFO("[CLIENT_CLEAR] close audio_rtp fd=%d client=%p", clientinfo->udp_sd_rtp_1, clientinfo);
         closeSocket(clientinfo->udp_sd_rtp_1);
         clientinfo->udp_sd_rtp_1 = INVALID_SOCKET;
     }
     if(clientinfo->udp_sd_rtcp_1 != INVALID_SOCKET){
+        LOG_INFO("[CLIENT_CLEAR] close audio_rtcp fd=%d client=%p", clientinfo->udp_sd_rtcp_1, clientinfo);
         closeSocket(clientinfo->udp_sd_rtcp_1);
         clientinfo->udp_sd_rtcp_1 = INVALID_SOCKET;
     }
     for(int i = 0; i < sizeof(clientinfo->event_data) / sizeof(clientinfo->event_data[0]); i++){
         if(clientinfo->event_data[i] != NULL){
+            LOG_WARN("[CLIENT_CLEAR] free event slot=%d event_data=%p fd=%d fd_type=%d events=0x%x user_data=%p client=%p",
+                     i, clientinfo->event_data[i], clientinfo->event_data[i]->fd,
+                     clientinfo->event_data[i]->fd_type, clientinfo->event_data[i]->events,
+                     clientinfo->event_data[i]->user_data, clientinfo);
             free(clientinfo->event_data[i]);
             clientinfo->event_data[i] = NULL;
         }
     }
+    LOG_WARN("[CLIENT_CLEAR] reset client fields client=%p session=%p", clientinfo, clientinfo->session);
     memset(clientinfo->client_ip, 0, sizeof(clientinfo->client_ip));
     clientinfo->client_rtp_port = -1;
     clientinfo->client_rtcp_port = -1;
