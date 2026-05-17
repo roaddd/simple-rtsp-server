@@ -38,12 +38,17 @@ typedef enum
 } fd_type_t;
 
 /* 事件数据结构，包含用户数据、文件描述符类型、文件描述符和事件类型。 */
-typedef struct
+typedef struct event_data_ptr_st
 {
     void *user_data;
     fd_type_t fd_type;
     socket_t fd;
     int events;
+    /* event_data 会被 epoll/select 的本轮事件快照继续引用，不能在回调中立即释放。 */
+    int active;
+    /* 标记已从监听集合移除，等待 event loop 当前批次处理结束后再统一释放。 */
+    int pending_free;
+    struct event_data_ptr_st *next_pending_free;
 } event_data_ptr_t;
 
 enum event_type
@@ -81,6 +86,8 @@ void setEventCallback(event_callback_t event_in, event_callback_t event_out, eve
 int closeEvent();
 int addEvent(int events, event_data_ptr_t *event_data);
 int delEvent(event_data_ptr_t *event_data);
+/* 延迟释放 event_data，避免同一批 epoll_wait 返回的后续事件访问已释放指针。 */
+void retireEventData(event_data_ptr_t *event_data);
 void *startEventLoop(void *arg);
 void stopEventLoop();
 

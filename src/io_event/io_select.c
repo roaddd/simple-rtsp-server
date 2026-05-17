@@ -34,6 +34,9 @@ int addEvent(int events, event_data_ptr_t *event_data){
         printf("addEvent failed [event_listen_cnt=%d]\n", event_listen_cnt);
     }
     event_data->events = events;
+    event_data->active = 1;
+    event_data->pending_free = 0;
+    event_data->next_pending_free = NULL;
     mthread_mutex_lock(&mut_select);
     for(int i = 0; i < SELECT_MAX; i++){
         if(event_listen[i] == NULL){
@@ -74,6 +77,16 @@ int delEvent(event_data_ptr_t *event_data){
     mthread_mutex_unlock(&mut_select);
     printf("delEvent failed [fd=%d] [event_listen_cnt=%d] [addr:%p]\n", event_data->fd, event_listen_cnt, event_data);
     return -1;
+}
+
+void retireEventData(event_data_ptr_t *event_data){
+    if(event_data == NULL){
+        return;
+    }
+    /* select 版本没有 epoll_wait 的批量 ptr 快照问题，但保持同一套释放接口。 */
+    event_data->active = 0;
+    event_data->pending_free = 1;
+    free(event_data);
 }
 
 void *startEventLoop(void *arg){

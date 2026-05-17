@@ -540,8 +540,9 @@ static int eventDel(struct clientinfo_st *ev)
         LOG_ERROR("[CLIENT_EVENT_DEL] clientinfo is null");
         return -1;
     }
-    LOG_WARN("[CLIENT_EVENT_DEL] begin client name=%s session=%p sd=%d udp_rtp=%d udp_rtcp=%d udp_rtp_1=%d udp_rtcp_1=%d",
-             ev->session->filename, ev, ev->session, ev->sd, ev->udp_sd_rtp, ev->udp_sd_rtcp, ev->udp_sd_rtp_1, ev->udp_sd_rtcp_1);
+    LOG_WARN("[CLIENT_EVENT_DEL] begin client name=%s client=%p session=%p sd=%d udp_rtp=%d udp_rtcp=%d udp_rtp_1=%d udp_rtcp_1=%d",
+             ev->session->filename, ev, ev->session, ev->sd, ev->udp_sd_rtp,
+             ev->udp_sd_rtcp, ev->udp_sd_rtp_1, ev->udp_sd_rtcp_1);
     if(ev->sd == INVALID_SOCKET){
         LOG_WARN("[CLIENT_EVENT_DEL] skip invalid tcp sd client name=%s session=%p", ev->session->filename, ev->session);
         return -1;
@@ -818,7 +819,8 @@ int clearClient(struct clientinfo_st *clientinfo)
                      i, clientinfo->event_data[i], clientinfo->event_data[i]->fd,
                      clientinfo->event_data[i]->fd_type, clientinfo->event_data[i]->events,
                      clientinfo->event_data[i]->user_data, clientinfo->session->filename);
-            free(clientinfo->event_data[i]);
+            /* event loop 可能仍在处理本轮事件快照，event_data 交给 event 层延迟释放。 */
+            retireEventData(clientinfo->event_data[i]);
             clientinfo->event_data[i] = NULL;
         }
     }
