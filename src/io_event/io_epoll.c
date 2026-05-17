@@ -44,7 +44,6 @@ int addEvent(int events, event_data_ptr_t *event_data){
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, event_data->fd, &epv) < 0){
         LOG_ERROR("[EVENT_ADD] failed fd=%d fd_type=%d events=0x%x listen_cnt=%d event_data=%p user_data=%p",
                   event_data->fd, event_data->fd_type, events, event_listen_cnt, event_data, event_data->user_data);
-        printf("addEvent failed [fd=%d] [event_listen_cnt=%d] [addr:%p]\n", event_data->fd, event_listen_cnt, event_data);
         mthread_mutex_unlock(&mut_epoll);
         return -1;
     }
@@ -53,7 +52,6 @@ int addEvent(int events, event_data_ptr_t *event_data){
 #ifdef EVENT_DEBUG
         LOG_INFO("[EVENT_ADD] ok fd=%d fd_type=%d events=0x%x listen_cnt=%d event_data=%p user_data=%p",
                  event_data->fd, event_data->fd_type, events, event_listen_cnt, event_data, event_data->user_data);
-        printf("addEvent OK [fd=%d] [event_listen_cnt=%d] [addr:%p]\n", event_data->fd, event_listen_cnt, event_data);
 #endif
     }
     mthread_mutex_unlock(&mut_epoll);
@@ -70,16 +68,14 @@ int delEvent(event_data_ptr_t *event_data){
     if(epoll_ctl(epoll_fd, EPOLL_CTL_DEL, event_data->fd, &epv) < 0){
         LOG_ERROR("[EVENT_DEL] failed fd=%d fd_type=%d events=0x%x listen_cnt=%d event_data=%p user_data=%p",
                   event_data->fd, event_data->fd_type, event_data->events, event_listen_cnt, event_data, event_data->user_data);
-        printf("delEvent failed [fd=%d] [event_listen_cnt=%d] [addr:%p]\n", event_data->fd, event_listen_cnt, event_data);
         mthread_mutex_unlock(&mut_epoll);
         return -1;
     }
     else{
         event_listen_cnt--;
 #ifdef EVENT_DEBUG
-        LOG_INFO("[EVENT_DEL] ok fd=%d fd_type=%d events=0x%x listen_cnt=%d event_data=%p user_data=%p",
+        LOG_WARN("[EVENT_DEL] ok fd=%d fd_type=%d events=0x%x listen_cnt=%d event_data=%p user_data=%p",
                  event_data->fd, event_data->fd_type, event_data->events, event_listen_cnt, event_data, event_data->user_data);
-        printf("delEvent OK [fd=%d] [event_listen_cnt=%d] [addr:%p]\n", event_data->fd, event_listen_cnt, event_data);
 #endif
     }
     mthread_mutex_unlock(&mut_epoll);
@@ -94,7 +90,6 @@ void *startEventLoop(void *arg){
         mthread_mutex_unlock(&mut_epoll);
         if(nfd < 0){
             LOG_ERROR("[EPOLL_WAIT] failed epoll_fd=%d", epoll_fd);
-            printf("epoll_wait error, exit\n");
             exit(-1);
         }
         if(nfd > 0){
