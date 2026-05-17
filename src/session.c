@@ -548,8 +548,6 @@ static int eventDel(struct clientinfo_st *ev)
 }
 static int delClient(event_data_ptr_t *event_data){
     struct clientinfo_st *clientinfo = (struct clientinfo_st *)event_data->user_data;
-    int type = event_data->fd_type;
-    socket_t fd = event_data->fd;
     if(clientinfo == NULL || clientinfo->sd == INVALID_SOCKET){
         return -1;
     }
@@ -1505,7 +1503,6 @@ int addClient(char* suffix,
 #endif
     int istrueflag = 0;
     int pos = 0;
-    int fps;
     char path_filename[1024] = {0};
     memcpy(path_filename, mp4Dir, strlen(mp4Dir));
     memcpy(path_filename + strlen(mp4Dir), suffix, strlen(suffix));

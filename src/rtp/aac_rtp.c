@@ -15,7 +15,7 @@ int rtpSendAACFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPa
     //             channels);
     // fwrite(adts_header_buf, 1, 7, aac_fd);
     // fwrite(data, 1, size, aac_fd);
-    int ret;
+    int ret = 0;
     int send_bytes = 0;
     if(tcp_header != NULL && sig != -1){ // tcp
         tcp_header->magic = '$';

@@ -5,6 +5,7 @@ option(RTSP_FILE_SERVER "Enable RTSP file server support" OFF)
 option(DEVICE_LIVE "Enable device live support" OFF)
 
 include_directories(./include ./src ./src/rtp ./src/io_event ./3rdparty ./thirdparty/logger/inc)
+link_directories(${PROJECT_SOURCE_DIR}/thirdparty/logger/lib)
 aux_source_directory(./src SRC)
 aux_source_directory(./src/rtp RTP)
 aux_source_directory(./src/io_event IO_EVENT)
@@ -35,7 +36,7 @@ target_include_directories(rtsp_server
     PUBLIC ${PROJECT_SOURCE_DIR}/include
     PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/rtp ${PROJECT_SOURCE_DIR}/src/io_event ${PROJECT_SOURCE_DIR}/3rdparty ${PROJECT_SOURCE_DIR}/thirdparty/logger/inc
 )
-target_link_libraries(rtsp_server ${PROJECT_SOURCE_DIR}/thirdparty/logger/lib/liblogger.a)
+target_link_libraries(rtsp_server logger)
 if(WIN32)
     # Set the function stack size to 6MB
     add_compile_options(-Wl,--stack,6000000)
