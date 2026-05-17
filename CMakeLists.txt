@@ -4,7 +4,7 @@ project (RTSPSERVER)
 option(RTSP_FILE_SERVER "Enable RTSP file server support" OFF)
 option(DEVICE_LIVE "Enable device live support" OFF)
 
-include_directories(./include ./src ./src/rtp ./src/io_event ./3rdparty)
+include_directories(./include ./src ./src/rtp ./src/io_event ./3rdparty ./thirdparty/logger/inc)
 aux_source_directory(./src SRC)
 aux_source_directory(./src/rtp RTP)
 aux_source_directory(./src/io_event IO_EVENT)
@@ -33,12 +33,13 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ./)
 add_library(rtsp_server SHARED ${SRC} ${RTP} ${IO_EVENT} ${3RD})
 target_include_directories(rtsp_server
     PUBLIC ${PROJECT_SOURCE_DIR}/include
-    PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/rtp ${PROJECT_SOURCE_DIR}/src/io_event ${PROJECT_SOURCE_DIR}/3rdparty
+    PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/rtp ${PROJECT_SOURCE_DIR}/src/io_event ${PROJECT_SOURCE_DIR}/3rdparty ${PROJECT_SOURCE_DIR}/thirdparty/logger/inc
 )
+target_link_libraries(rtsp_server ${PROJECT_SOURCE_DIR}/thirdparty/logger/lib/liblogger.a)
 if(WIN32)
     # Set the function stack size to 6MB
     add_compile_options(-Wl,--stack,6000000)
-    target_link_libraries(rtsp_server ws2_32)
+    target_link_libraries(rtsp_server ws2_32 pthread)
 elseif(UNIX)
     target_link_libraries(rtsp_server pthread)
 endif()

@@ -1,5 +1,6 @@
 #include "session.h"
 #include "rtcp_feedback.h"
+#include "logger.h"
 
 /* 大端读取工具：RTCP/RTP 头字段均为网络字节序 */
 static uint16_t readBe16(const uint8_t *p){
@@ -88,6 +89,9 @@ static void updateRtcpReceiverReport(struct clientinfo_st *clientinfo, struct Rt
         uint32_t dlsr;
 
         target_ctx = selectRtcpRxContextBySsrc(clientinfo, source_ssrc, target_ctx);
+        if (target_ctx != ctx) {
+            target_ctx->rr_count++;
+        }
         target_ctx->last_reportee_ssrc = source_ssrc;
         target_ctx->fraction_lost = p[4];
         target_ctx->cumulative_lost = readSigned24(p + 5);
@@ -106,6 +110,19 @@ static void updateRtcpReceiverReport(struct clientinfo_st *clientinfo, struct Rt
             }
         }
         target_ctx->last_rx_time_ms = ctx->last_rx_time_ms;
+        /* 每个 Receiver Report block 都打印，方便按 client 观察 QoS 指标。 */
+        LOG_INFO("[RTCP_RR] client=%s media=%s reportee_ssrc=%u fraction_lost=%u cumulative_lost=%d highest_seq=%u jitter=%u lsr=%u dlsr=%u rtt_ms=%u rr_count=%llu",
+                 clientinfo->client_ip,
+                 (target_ctx == &clientinfo->rtcp_rx_audio) ? "audio" : "video",
+                 source_ssrc,
+                 target_ctx->fraction_lost,
+                 target_ctx->cumulative_lost,
+                 target_ctx->highest_seq,
+                 target_ctx->jitter,
+                 target_ctx->lsr,
+                 target_ctx->dlsr,
+                 target_ctx->rtt_ms,
+                 (unsigned long long)target_ctx->rr_count);
         p += 24;
     }
 }

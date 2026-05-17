@@ -90,11 +90,11 @@ int sessionAddVideo(void *context, enum VIDEO_e type){
 int sessionAddAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels){
     return addAudio(context, type, profile, sample_rate, channels);
 }
-int sessionSendVideoData(void *context, uint8_t *data, int data_len){
-    return sendVideoData(context, data, data_len);
+int sessionSendVideoFrame(void *context, const RtspMediaFrame *frame){
+    return sendVideoFrame(context, frame);
 }
-int sessionSendAudioData(void *context, uint8_t *data, int data_len){
-    return sendAudioData(context, data, data_len);
+int sessionSendAudioFrame(void *context, const RtspMediaFrame *frame){
+    return sendAudioFrame(context, frame);
 }
 int rtspSessionGetClientNum(void *context){
     return getSessionClientNum(context);

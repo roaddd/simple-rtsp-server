@@ -1,5 +1,5 @@
 #include "rtp.h"
-int rtpSendPCMAFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t sample_rate, int channels, int profile, int sig, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
+int rtpSendPCMAFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t rtp_timestamp, int channels, int profile, int sig, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
 {
     /* UDP 模式没有 interleaved header 预发送，ret 必须先归零。 */
     int ret = 0;
@@ -21,7 +21,7 @@ int rtpSendPCMAFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpP
         printf("parameter error\n");
         return -1;
     }
-    rtp_packet->rtpHeader.timestamp = getTimestamp(sample_rate);
+    rtp_packet->rtpHeader.timestamp = rtp_timestamp;
     if(rtcp_info != NULL){
         rtcp_info->rtp_timestamp = rtp_packet->rtpHeader.timestamp;
         rtcp_info->packet_count = 1;

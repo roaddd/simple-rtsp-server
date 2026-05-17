@@ -19,6 +19,11 @@
 #define VIDEO_DATA_MAX_SIZE 2 * 1024 * 1024
 #define RING_BUFFER_MAX     32
 // #define SEND_DATA_EVENT // If using event to send audio and video, the memory grows rapidly and needs to be fixed
+
+/**
+ * 当前每调一次 sessionSendVideoFrame()，rtsp-server 就直接对每个正在 PLAY 的 client 发送 RTP
+ */
+
 enum TRANSPORT_e
 {
     RTP_OVER_TCP = 1,
@@ -34,7 +39,17 @@ struct MediaPacket_st
     char data[2 * 1024 * 1024];
     int64_t size;
     int type; // MEDIA_e
+    uint64_t pts_us;
 };
+
+#ifndef RTSP_MEDIA_FRAME_DEFINED
+#define RTSP_MEDIA_FRAME_DEFINED
+typedef struct RtspMediaFrame {
+    uint8_t *data;
+    int data_len;
+    uint64_t pts_us;
+} RtspMediaFrame;
+#endif
 struct RtcpSenderContext
 {
     uint32_t packet_count;
@@ -174,8 +189,8 @@ int initClient(struct session_st *session, struct clientinfo_st *clientinfo);
  */
 int clearClient(struct clientinfo_st *clientinfo);
 
-void pushFrameToList1(struct clientinfo_st *clientinfo, char *ptr, int ptr_len, int type);
-void pushFrameToList2(struct clientinfo_st *clientinfo, char *ptr, int ptr_len, int type);
+void pushFrameToList1(struct clientinfo_st *clientinfo, char *ptr, int ptr_len, int type, uint64_t pts_us);
+void pushFrameToList2(struct clientinfo_st *clientinfo, char *ptr, int ptr_len, int type, uint64_t pts_us);
 
 struct MediaPacket_st getFrameFromList1(struct clientinfo_st *clientinfo);
 struct MediaPacket_st getFrameFromList2(struct clientinfo_st *clientinfo);
@@ -222,15 +237,16 @@ int addVideo(void *context, enum VIDEO_e type);
  */
 int addAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels);
 /**
- * on NALU h26x without startCode(custom session)
+ * 发送一帧编码视频。H264 Annex-B 帧在 RTSP server 内部拆成 RTP NALU/FU-A 包，
+ * 并使用 frame->pts_us 作为 RTP timestamp 的换算基准。
  * @return 0:ok <0:error
  */
-int sendVideoData(void *context, uint8_t *data, int data_len);
+int sendVideoFrame(void *context, const RtspMediaFrame *frame);
 /**
- * AAC without adts or PCMA(custom session)
+ * 发送一帧编码音频。AAC payload 不含 ADTS；PCMA 为原始 G711A 数据。
  * @return 0:ok <0:error
  */
-int sendAudioData(void *context, uint8_t *data, int data_len);
+int sendAudioFrame(void *context, const RtspMediaFrame *frame);
 
 int getSessionAudioType(struct session_st *session);
 int getSessionAudioInfo(struct session_st *session, int *sample_rate, int *channels, int *profile);

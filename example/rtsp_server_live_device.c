@@ -26,6 +26,7 @@ void print_nalu_type(uint8_t nalu_type) {
     printf("NALU Type: %d (%s)\n", nalu_type, frame_type);
 }
 void videoCallback(uint8_t *data, int data_len, void *arg){
+    RtspMediaFrame rtsp_frame;
     // if (output_h264 == NULL) {
     //     output_h264 = fopen("output.h264", "wb");
     //     if (!output_h264) {
@@ -34,54 +35,11 @@ void videoCallback(uint8_t *data, int data_len, void *arg){
     //     }
     // }
 
-    int start = 0;
-    while(start < data_len){
-        int nalu_start = -1;
-        int nalu_end = -1;
-        int start_code_length = 0;
-
-        for(int i = start; i <= data_len - 3; i++){
-            if(data[i] == 0 && data[i + 1] == 0) {
-                if(data[i + 2] == 1){
-                    nalu_start = i + 3;
-                    start_code_length = 3;
-                }
-                else if(i < data_len - 4 && data[i + 2] == 0 && data[i + 3] == 1){
-                    nalu_start = i + 4;
-                    start_code_length = 4;
-                }
-                if(nalu_start != -1){
-                    break;
-                }
-            }
-        }
-        if(nalu_start != -1){
-            for(int i = nalu_start; i <= data_len - 3; i++){
-                if(data[i] == 0 && data[i + 1] == 0 &&
-                    ((data[i + 2] == 1) || (i < data_len - 4 && data[i + 2] == 0 && data[i + 3] == 1))){
-                    nalu_end = i;
-                    break;
-                }
-            }
-
-            if(nalu_end == -1){
-                nalu_end = data_len;
-            }
-
-            if(nalu_end > nalu_start){
-                uint8_t nalu_type = data[nalu_start] & 0x1F;
-                // print_nalu_type(nalu_type);
-                // fwrite(data + nalu_start - start_code_length, 1, nalu_end - (nalu_start - start_code_length), output_h264);
-                int ret = sessionSendVideoData(context, data + nalu_start - start_code_length, nalu_end - (nalu_start - start_code_length));
-                if(ret < 0){
-                    printf("sessionSendVideoData error\n");
-                }
-            }
-            start = nalu_end;
-        }
-        else{
-            break;
-        }
+    rtsp_frame.data = data;
+    rtsp_frame.data_len = data_len;
+    rtsp_frame.pts_us = getTimeMs() * 1000ULL;
+    if(sessionSendVideoFrame(context, &rtsp_frame) < 0){
+        printf("sessionSendVideoFrame error\n");
     }
 }
 void *sendVideoDataThd(void *arg){
@@ -101,9 +59,9 @@ void audioCallback(uint8_t *data, int data_len, void *arg){
     // }
     // fwrite(data, 1, data_len, output_aac);
     int adts_header_len = 7;
-    int ret = sessionSendAudioData(context, data + adts_header_len, data_len - 7);
-    if(ret < 0){
-        printf("sessionSendAudioData error\n");
+    RtspMediaFrame rtsp_frame = { data + adts_header_len, data_len - adts_header_len, getTimeMs() * 1000ULL };
+    if(sessionSendAudioFrame(context, &rtsp_frame) < 0){
+        printf("sessionSendAudioFrame error\n");
     }
 }
 void *sendAudioDataThd(void *arg){

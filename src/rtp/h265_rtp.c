@@ -1,5 +1,5 @@
 #include "rtp.h"
-int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, uint8_t *frame, uint32_t frame_size, int fps, int sig_0, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
+int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, uint8_t *frame, uint32_t frame_size, uint32_t rtp_timestamp, int sig_0, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
 {
     uint8_t nalu_type;
     int send_bytes = 0;
@@ -13,7 +13,7 @@ int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
     rtp_packet->rtpHeader.marker = 0;
     memset(rtp_packet->payload, 0, PTK_RTP_TCP_MAX + 3);
 
-    rtp_packet->rtpHeader.timestamp = getTimestamp(90000);
+    rtp_packet->rtpHeader.timestamp = rtp_timestamp;
     if(rtcp_info != NULL){
         rtcp_info->rtp_timestamp = rtp_packet->rtpHeader.timestamp;
         rtcp_info->packet_count = 0;

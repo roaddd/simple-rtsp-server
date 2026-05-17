@@ -60,6 +60,20 @@ static int is_valid_setup_track(const char *track)
     return track && (!strcmp(track, "track0") || !strcmp(track, "track1"));
 }
 
+static void close_pending_setup_sockets(socket_t *fds, size_t count)
+{
+    size_t i;
+    if (!fds) {
+        return;
+    }
+    for (i = 0; i < count; ++i) {
+        if (fds[i] != INVALID_SOCKET) {
+            closeSocket(fds[i]);
+            fds[i] = INVALID_SOCKET;
+        }
+    }
+}
+
 /**
  * @description: 处理客户端线程，在新客户端 TCP 连接建立后启动，
  * 负责首轮 RTSP 交互（OPTIONS/DESCRIBE/SETUP/PLAY）、鉴权、解析 Transport、最后调用 addClient(...) 把客户端加入会话
@@ -144,7 +158,7 @@ void *doClientThd(void *arg)
         cseq = atoi(CSeq);
         if(arg_thd->auth == 1){
             // authorization
-            if(!strcmp(request_message.method, "SETUP") || !strcmp(request_message.method, "DESCRIBE") || !strcmp(request_message.method, "PLAY")){
+            if(!strcmp(request_message.method, "SETUP") || !strcmp(request_message.method, "DESCRIBE") || !strcmp(request_message.method, "PLAY") || !strcmp(request_message.method, "TEARDOWN")){
                 char *Authorization = findValueByKey(&request_message, "Authorization");
                 if(Authorization == NULL){
                     handleCmd_Unauthorized(send_buf, cseq, realm, nonce);
@@ -293,6 +307,11 @@ void *doClientThd(void *arg)
             }
             handleCmd_PLAY(send_buf, cseq, url_play, session_id);
         }
+        else if(!strcmp(request_message.method, "TEARDOWN")){
+            char *Session = findValueByKey(&request_message, "Session");
+            handleCmd_General(send_buf, cseq, Session ? Session : session_id);
+            goto out;
+        }
         else{
             goto out;
         }
@@ -326,6 +345,19 @@ need_more_data:
         }
     }
 out:
+    {
+        socket_t pending_fds[] = {
+            server_udp_socket_rtp_fd,
+            server_udp_socket_rtcp_fd,
+            server_udp_socket_rtp_1_fd,
+            server_udp_socket_rtcp_1_fd
+        };
+        close_pending_setup_sockets(pending_fds, sizeof(pending_fds) / sizeof(pending_fds[0]));
+        server_udp_socket_rtp_fd = pending_fds[0];
+        server_udp_socket_rtcp_fd = pending_fds[1];
+        server_udp_socket_rtp_1_fd = pending_fds[2];
+        server_udp_socket_rtcp_1_fd = pending_fds[3];
+    }
     if(strlen(send_buf) > 0){
 #ifdef RTSP_DEBUG
         printf("---------------S->C--------------\n");

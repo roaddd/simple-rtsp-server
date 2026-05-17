@@ -30,6 +30,21 @@ enum AUDIO_e
     AUDIO_NONE,
 };
 
+#ifndef RTSP_MEDIA_FRAME_DEFINED
+#define RTSP_MEDIA_FRAME_DEFINED
+/*
+ * 上游媒体流水线传入的一帧编码数据。
+ * data/data_len 指向完整帧缓存。H264 Annex-B 帧内可以包含多个 NALU；
+ * RTSP server 负责在内部做 RTP 打包。
+ * pts_us 是媒体显示时间戳，单位微秒，不是 RTP tick。
+ */
+typedef struct RtspMediaFrame {
+    uint8_t *data;
+    int data_len;
+    uint64_t pts_us;
+} RtspMediaFrame;
+#endif
+
 int rtspModuleInit(void);
 void rtspModuleDel(void);
 
@@ -49,8 +64,12 @@ void rtspStopServer(void);
 int sessionAddVideo(void *context, enum VIDEO_e type);
 int sessionAddAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels);
 
-int sessionSendVideoData(void *context, uint8_t *data, int data_len);
-int sessionSendAudioData(void *context, uint8_t *data, int data_len);
+/*
+ * 整帧发送 API。server 会把 frame->pts_us 换算到对应媒体的 RTP 时钟域，
+ * 并保证同一帧拆出的所有 RTP 包使用同一个 timestamp。
+ */
+int sessionSendVideoFrame(void *context, const RtspMediaFrame *frame);
+int sessionSendAudioFrame(void *context, const RtspMediaFrame *frame);
 int rtspSessionGetClientNum(void *context);
 
 #ifdef __cplusplus

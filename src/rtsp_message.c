@@ -121,7 +121,7 @@ int handleCmd_OPTIONS(char *result, int cseq)
 {
     sprintf(result, "RTSP/1.0 200 OK\r\n"
                     "CSeq: %d\r\n"
-                    "Public: OPTIONS, DESCRIBE, SETUP, PLAY\r\n"
+                    "Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN\r\n"
                     "\r\n",
             cseq);
 

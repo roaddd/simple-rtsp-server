@@ -92,6 +92,8 @@ void *startEventLoop(void *arg){
         write_cnt = 0;
         except_cnt = 0;
         max_fd = 0;
+
+        /* 从事件列表中获取待处理的文件描述符 */
         mthread_mutex_lock(&mut_select);
         for(int i = 0; i < SELECT_MAX; i++){
             event_data_ptr_t *event_data = event_listen[i];

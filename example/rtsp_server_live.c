@@ -132,9 +132,12 @@ void *sendDataThd(void *arg){
                 m_sleep(1000 / fps);
             }
         }
-        ret = sessionSendVideoData(context, frame + start_code, frame_size - start_code);
+        {
+            RtspMediaFrame rtsp_frame = { frame, frame_size, getTimeMs() * 1000ULL };
+            ret = sessionSendVideoFrame(context, &rtsp_frame);
+        }
         if(ret < 0){
-            printf("sessionSendVideoData error\n");
+            printf("sessionSendVideoFrame error\n");
         }
     }
     if(frame){

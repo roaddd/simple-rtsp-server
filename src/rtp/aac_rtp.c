@@ -2,7 +2,7 @@
 // char *aac_filename = "test_out.aac";
 // FILE *aac_fd = NULL;
 
-int rtpSendAACFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t sample_rate, int channels, int profile, int sig, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
+int rtpSendAACFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, char *data, int size, uint32_t rtp_timestamp, int channels, int profile, int sig, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
 {
     // if(aac_fd==NULL){
     //     aac_fd = fopen(aac_filename, "wb");
@@ -34,7 +34,7 @@ int rtpSendAACFrame(socket_t fd, struct rtp_tcp_header *tcp_header, struct RtpPa
         printf("parameter error\n");
         return -1;
     }
-    rtp_packet->rtpHeader.timestamp = getTimestamp(sample_rate);
+    rtp_packet->rtpHeader.timestamp = rtp_timestamp;
     if(rtcp_info != NULL){
         rtcp_info->rtp_timestamp = rtp_packet->rtpHeader.timestamp;
         rtcp_info->packet_count = 1;
