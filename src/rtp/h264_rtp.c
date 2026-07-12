@@ -1,4 +1,5 @@
 #include "rtp.h"
+#include "logger.h"
 
 /*
  * H264 over RTP 关键协议点：
@@ -249,6 +250,10 @@ int rtpSendH264Frame(socket_t sd,
         return -1;
     }
 
+    LOG_INFO("[H264_RTP] rtp_ts=%u frame_size=%u transport=%s",
+             rtp_timestamp,
+             frame_size,
+             (tcp_header != NULL && sig_0 != -1) ? "tcp" : "udp");
     if (rtcp_info) {
         /*
          * RTCP Sender Report 会把 NTP 时间和 RTP timestamp 关联起来。

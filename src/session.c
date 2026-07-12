@@ -1,4 +1,4 @@
-﻿#include "session.h"
+#include "session.h"
 
 #include "rtcp_feedback.h"
 #include "logger.h"
@@ -358,6 +358,7 @@ static int dispatchRtspControl(char *result, struct rtsp_request_message_st *req
     return handleCmd_405(result, cseq);
 }
 
+/* 将 PTS 转换为 RTP 时间戳 */
 static uint32_t ptsUsToRtpTimestamp(uint64_t pts_us, uint32_t clock_rate)
 {
     /* RTP timestamp 使用各编码自己的时钟，外部传入的 PTS 单位是微秒。 */
@@ -1034,14 +1035,29 @@ static int sendMediaFrameToClient(struct clientinfo_st *clientinfo, char *ptr, i
     ret = getSessionAudioInfo(clientinfo->session, &sample_rate, &channels, &profile);
     enum AUDIO_e audio_type = getSessionAudioType(clientinfo->session);
     if(type == VIDEO){
+        static uint64_t last_video_pts_us = 0;
+        static uint32_t last_video_rtp_ts = 0;
+        uint32_t video_rtp_ts = ptsUsToRtpTimestamp(pts_us, 90000);
+        uint64_t delta_us = (last_video_pts_us > 0 && pts_us >= last_video_pts_us) ? (pts_us - last_video_pts_us) : 0;
+        uint32_t rtp_delta = (last_video_pts_us > 0) ? (uint32_t)(video_rtp_ts - last_video_rtp_ts) : 0;
+
+        LOG_INFO("[RTSP_TS] video pts_us=%llu delta_us=%llu rtp_ts=%u rtp_delta=%u size=%d client=%p",
+                 (unsigned long long)pts_us,
+                 (unsigned long long)delta_us,
+                 video_rtp_ts,
+                 rtp_delta,
+                 ptr_len,
+                 (void *)clientinfo);
+        last_video_pts_us = pts_us;
+        last_video_rtp_ts = video_rtp_ts;
         memset(&rtcp_info, 0, sizeof(rtcp_info));
         if(clientinfo->udp_sd_rtp != INVALID_SOCKET){ // udp
             switch(video_type){
                 case VIDEO_H264:
-                    ret = rtpSendH264Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, ptsUsToRtpTimestamp(pts_us, 90000), -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
+                    ret = rtpSendH264Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
                     break;
                 case VIDEO_H265:
-                    ret = rtpSendH265Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, ptsUsToRtpTimestamp(pts_us, 90000), -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
+                    ret = rtpSendH265Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
                     break;
                 default:
                     break;
@@ -1050,10 +1066,10 @@ static int sendMediaFrameToClient(struct clientinfo_st *clientinfo, char *ptr, i
         else{ // tcp
             switch(video_type){
                 case VIDEO_H264:
-                    ret = rtpSendH264Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, ptsUsToRtpTimestamp(pts_us, 90000), clientinfo->sig_0, NULL, -1, &rtcp_info);
+                    ret = rtpSendH264Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, clientinfo->sig_0, NULL, -1, &rtcp_info);
                     break;
                 case VIDEO_H265:
-                    ret = rtpSendH265Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, ptsUsToRtpTimestamp(pts_us, 90000), clientinfo->sig_0, NULL, -1, &rtcp_info);
+                    ret = rtpSendH265Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, clientinfo->sig_0, NULL, -1, &rtcp_info);
                     break;
                 default:
                     break;

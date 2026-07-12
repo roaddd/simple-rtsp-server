@@ -2,6 +2,17 @@
 #include "rtcp_feedback.h"
 #include "logger.h"
 
+#include <string.h>
+
+static RtspRtcpReportCallback g_rtcp_report_callback = NULL;
+static void *g_rtcp_report_userdata = NULL;
+
+/* 注册 RTCP RR 反馈回调；RTSP server 解析 RR 后通过该回调把网络指标通知上层。 */
+void rtspSetRtcpReportCallback(RtspRtcpReportCallback callback, void *userdata){
+    g_rtcp_report_callback = callback;
+    g_rtcp_report_userdata = userdata;
+}
+
 /* 大端读取工具：RTCP/RTP 头字段均为网络字节序 */
 static uint16_t readBe16(const uint8_t *p){
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
@@ -70,8 +81,16 @@ static struct RtcpReceiverContext *selectRtcpRxContextBySsrc(struct clientinfo_s
  * 指标包括：丢包比例、累计丢包、最高序号、抖动、LSR/DLSR、RTT
  */
 static void updateRtcpReceiverReport(struct clientinfo_st *clientinfo, struct RtcpReceiverContext *ctx, const uint8_t *packet, int packet_len, int report_count){
-    int i;
-    const uint8_t *p;
+    int i = 0;
+    const uint8_t *p = NULL;
+    struct RtcpReceiverContext *target_ctx = NULL;
+    uint32_t source_ssrc = 0;
+    uint32_t arrival_ntp_middle = 0;
+    uint32_t lsr = 0;
+    uint32_t dlsr = 0;
+    uint64_t lsr_dlsr = 0;
+    uint32_t rtt_ntp = 0;
+    RtspRtcpReceiverReport report;
     if(clientinfo == NULL || ctx == NULL || packet == NULL){
         return;
     }
@@ -82,12 +101,13 @@ static void updateRtcpReceiverReport(struct clientinfo_st *clientinfo, struct Rt
     ctx->last_rx_time_ms = getTimeMs();
     p = packet + 8;
     for(i = 0; i < report_count && (p + 24) <= (packet + packet_len); i++){
-        struct RtcpReceiverContext *target_ctx = ctx;
-        uint32_t source_ssrc = readBe32(p);
-        uint32_t arrival_ntp_middle = ntpMiddle32(getNtpTimestamp64());
-        uint32_t lsr;
-        uint32_t dlsr;
-
+        target_ctx = ctx;
+        source_ssrc = readBe32(p);
+        arrival_ntp_middle = ntpMiddle32(getNtpTimestamp64());
+        lsr = 0;
+        dlsr = 0;
+        lsr_dlsr = 0;
+        rtt_ntp = 0;
         target_ctx = selectRtcpRxContextBySsrc(clientinfo, source_ssrc, target_ctx);
         if (target_ctx != ctx) {
             target_ctx->rr_count++;
@@ -103,9 +123,9 @@ static void updateRtcpReceiverReport(struct clientinfo_st *clientinfo, struct Rt
         target_ctx->dlsr = dlsr;
         // RTT 估算: RTT = A - LSR - DLSR (单位 16.16 NTP)
         if(lsr != 0 && dlsr != 0){
-            uint64_t lsr_dlsr = (uint64_t)lsr + (uint64_t)dlsr;
+            lsr_dlsr = (uint64_t)lsr + (uint64_t)dlsr;
             if((uint64_t)arrival_ntp_middle > lsr_dlsr){
-                uint32_t rtt_ntp = arrival_ntp_middle - (uint32_t)lsr_dlsr;
+                rtt_ntp = arrival_ntp_middle - (uint32_t)lsr_dlsr;
                 target_ctx->rtt_ms = ntpDiffToMs(rtt_ntp);
             }
         }
@@ -123,6 +143,18 @@ static void updateRtcpReceiverReport(struct clientinfo_st *clientinfo, struct Rt
                  target_ctx->dlsr,
                  target_ctx->rtt_ms,
                  (unsigned long long)target_ctx->rr_count);
+        if(g_rtcp_report_callback != NULL){
+            memset(&report, 0, sizeof(report));
+            report.session_name = clientinfo->session ? clientinfo->session->filename : NULL;
+            report.client_ip = clientinfo->client_ip;
+            report.is_audio = (target_ctx == &clientinfo->rtcp_rx_audio) ? 1 : 0;
+            report.fraction_lost = target_ctx->fraction_lost;
+            report.cumulative_lost = target_ctx->cumulative_lost;
+            report.jitter = target_ctx->jitter;
+            report.rtt_ms = target_ctx->rtt_ms;
+            report.rr_count = target_ctx->rr_count;
+            g_rtcp_report_callback(&report, g_rtcp_report_userdata);
+        }
         p += 24;
     }
 }
@@ -133,6 +165,11 @@ static void updateRtcpReceiverReport(struct clientinfo_st *clientinfo, struct Rt
 static void rtcpHandlePacket(struct clientinfo_st *clientinfo, struct RtcpReceiverContext *ctx, const uint8_t *payload, int payload_len){
     const uint8_t *p = payload;
     int remain = payload_len;
+    int version = 0;
+    int report_count = 0;
+    int packet_type = 0;
+    int words = 0;
+    int packet_len = 0;
 
     if(clientinfo == NULL || ctx == NULL || payload == NULL || payload_len <= 0){
         return;
@@ -140,12 +177,12 @@ static void rtcpHandlePacket(struct clientinfo_st *clientinfo, struct RtcpReceiv
     ctx->packet_count++;
     ctx->last_rx_time_ms = getTimeMs();
     while(remain >= 4){
-        int version = (p[0] >> 6) & 0x03;
-        int report_count = p[0] & 0x1F;
-        int packet_type = p[1];
+        version = (p[0] >> 6) & 0x03;
+        report_count = p[0] & 0x1F;
+        packet_type = p[1];
         // length 字段单位是 32-bit words - 1
-        int words = readBe16(p + 2) + 1;
-        int packet_len = words * 4;
+        words = readBe16(p + 2) + 1;
+        packet_len = words * 4;
         if(version != RTP_VESION || packet_len < 4 || packet_len > remain){
             break;
         }

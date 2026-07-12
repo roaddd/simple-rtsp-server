@@ -45,6 +45,21 @@ typedef struct RtspMediaFrame {
 } RtspMediaFrame;
 #endif
 
+/* RTCP Receiver Report 解析后的网络反馈快照，由 RTSP server 通过回调通知上层。 */
+typedef struct RtspRtcpReceiverReport {
+    const char *session_name;     /* RTSP session 名称，用于上层把反馈归属到具体输出流。 */
+    const char *client_ip;        /* 反馈来源客户端 IP。 */
+    int is_audio;                 /* 0 表示视频 RTCP，1 表示音频 RTCP。 */
+    uint8_t fraction_lost;        /* RTCP RR fraction lost，0~255 对应 0~100%。 */
+    int32_t cumulative_lost;      /* RTCP RR 累计丢包数，24-bit signed 扩展到 int32。 */
+    uint32_t jitter;              /* RTCP RR interarrival jitter，单位为对应 RTP 时钟 tick。 */
+    uint32_t rtt_ms;              /* 根据 LSR/DLSR 估算出的 RTT，单位毫秒。 */
+    uint64_t rr_count;            /* 当前客户端/媒体方向累计收到的 RR 数量。 */
+} RtspRtcpReceiverReport;
+
+/* RTCP RR 反馈回调。RTSP server 只上报指标，不参与上层自适应策略决策。 */
+typedef void (*RtspRtcpReportCallback)(const RtspRtcpReceiverReport *report, void *userdata);
+
 int rtspModuleInit(void);
 void rtspModuleDel(void);
 
@@ -60,6 +75,8 @@ void rtspDelSession(void *context);
 
 int rtspStartServer(int auth, const char *server_ip, int server_port, const char *user, const char *password);
 void rtspStopServer(void);
+/* 注册 RTCP RR 反馈回调；传 NULL 可取消注册。 */
+void rtspSetRtcpReportCallback(RtspRtcpReportCallback callback, void *userdata);
 
 int sessionAddVideo(void *context, enum VIDEO_e type);
 int sessionAddAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels);
