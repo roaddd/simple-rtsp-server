@@ -80,6 +80,11 @@ void rtspSetRtcpReportCallback(RtspRtcpReportCallback callback, void *userdata);
 
 int sessionAddVideo(void *context, enum VIDEO_e type);
 int sessionAddAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels);
+/*
+ * 设置指定 session 的视频 RTP 包级 pacing 码率。
+ * pacing_rate_bps <= 0 表示关闭；音频 RTP 不受该接口影响。
+ */
+int rtspSetSessionVideoPacingRate(void *context, int pacing_rate_bps);
 
 /*
  * 整帧发送 API。server 会把 frame->pts_us 换算到对应媒体的 RTP 时钟域，

@@ -112,6 +112,7 @@ struct clientinfo_st
     struct RtpPacket *rtp_packet;   // video 
     struct RtpPacket *rtp_packet_1; // audio
     struct rtp_tcp_header *tcp_header;
+    RtpPacer video_pacer;              /* 视频 RTP 包级 pacer，每个客户端独立维护发送节奏。 */
     struct RtcpSenderContext rtcp_video;
     struct RtcpSenderContext rtcp_audio;
     struct RtcpReceiverContext rtcp_rx_video; // 视频 RTCP 接收统计
@@ -155,6 +156,7 @@ struct session_st
     int profile;
     int sample_rate;
     int channels;
+    int video_pacing_rate_bps;         /* 当前 session 的视频 RTP pacing 目标码率，<=0 表示关闭。 */
 };
 #ifdef RTSP_FILE_SERVER
 /**
@@ -236,6 +238,13 @@ int addVideo(void *context, enum VIDEO_e type);
  * @return 0:ok <0:error
  */
 int addAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels);
+/**
+ * 设置自定义 session 的视频 RTP 包级 pacing 码率。
+ * @param context addCustomSession 返回的 session 指针。
+ * @param pacing_rate_bps 目标码率，单位 bit/s；<=0 表示关闭 pacing。
+ * @return 0:ok <0:error
+ */
+int setVideoPacingRate(void *context, int pacing_rate_bps);
 /**
  * 发送一帧编码视频。H264 Annex-B 帧在 RTSP server 内部拆成 RTP NALU/FU-A 包，
  * 并使用 frame->pts_us 作为 RTP timestamp 的换算基准。

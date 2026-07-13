@@ -755,6 +755,7 @@ int initClient(struct session_st *session, struct clientinfo_st *clientinfo)
     clientinfo->rtp_packet = NULL;
     clientinfo->rtp_packet_1 = NULL;
     clientinfo->tcp_header = NULL;
+    rtpPacerInit(&clientinfo->video_pacer);
     memset(&clientinfo->rtcp_video, 0, sizeof(clientinfo->rtcp_video));
     memset(&clientinfo->rtcp_audio, 0, sizeof(clientinfo->rtcp_audio));
     memset(&clientinfo->rtcp_rx_video, 0, sizeof(clientinfo->rtcp_rx_video));
@@ -1016,6 +1017,7 @@ int createClient(struct clientinfo_st *clientinfo,
     rtpHeaderInit(clientinfo->rtp_packet_1, 0, 0, 0, RTP_VESION, getSessionAudioType(clientinfo->session) == AUDIO_AAC ? RTP_PAYLOAD_TYPE_AAC : RTP_PAYLOAD_TYPE_PCMA, 0, 0, 0, audio_ssrc);
 
     clientinfo->tcp_header = malloc(sizeof(struct rtp_tcp_header));
+    rtpPacerSetRate(&clientinfo->video_pacer, clientinfo->session->video_pacing_rate_bps);
 
     clientinfo->packet_list = (struct MediaPacket_st *)malloc((RING_BUFFER_MAX / 4) * sizeof(struct MediaPacket_st));
     clientinfo->packet_list_size = RING_BUFFER_MAX / 4;
@@ -1054,10 +1056,10 @@ static int sendMediaFrameToClient(struct clientinfo_st *clientinfo, char *ptr, i
         if(clientinfo->udp_sd_rtp != INVALID_SOCKET){ // udp
             switch(video_type){
                 case VIDEO_H264:
-                    ret = rtpSendH264Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
+                    ret = rtpSendH264Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info, &clientinfo->video_pacer);
                     break;
                 case VIDEO_H265:
-                    ret = rtpSendH265Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info);
+                    ret = rtpSendH265Frame(clientinfo->udp_sd_rtp, NULL, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, -1, clientinfo->client_ip, clientinfo->client_rtp_port, &rtcp_info, &clientinfo->video_pacer);
                     break;
                 default:
                     break;
@@ -1066,10 +1068,10 @@ static int sendMediaFrameToClient(struct clientinfo_st *clientinfo, char *ptr, i
         else{ // tcp
             switch(video_type){
                 case VIDEO_H264:
-                    ret = rtpSendH264Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, clientinfo->sig_0, NULL, -1, &rtcp_info);
+                    ret = rtpSendH264Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, clientinfo->sig_0, NULL, -1, &rtcp_info, &clientinfo->video_pacer);
                     break;
                 case VIDEO_H265:
-                    ret = rtpSendH265Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, clientinfo->sig_0, NULL, -1, &rtcp_info);
+                    ret = rtpSendH265Frame(clientinfo->sd, clientinfo->tcp_header, clientinfo->rtp_packet, (uint8_t *)ptr, (uint32_t)ptr_len, video_rtp_ts, clientinfo->sig_0, NULL, -1, &rtcp_info, &clientinfo->video_pacer);
                     break;
                 default:
                     break;
@@ -1340,6 +1342,34 @@ int addAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int
     session->channels = channels;
     return 0;
 }
+
+int setVideoPacingRate(void *context, int pacing_rate_bps){
+    struct session_st *session = NULL;
+    int i = 0;
+
+    if(context == NULL){
+        return -1;
+    }
+    session = (struct session_st *)context;
+    if(pacing_rate_bps < 0){
+        pacing_rate_bps = 0;
+    }
+
+    mthread_mutex_lock(&session->mut);
+    session->video_pacing_rate_bps = pacing_rate_bps;
+    for(i = 0; i < CLIENTMAX; i++){
+        if(session->clientinfo[i].sd != INVALID_SOCKET){
+            /*
+             * 每个客户端有独立 pacer 状态。运行期调整 session 目标码率时，
+             * 只同步目标码率，不共享发送时间，避免多个客户端互相影响。
+             */
+            rtpPacerSetRate(&session->clientinfo[i].video_pacer, pacing_rate_bps);
+        }
+    }
+    mthread_mutex_unlock(&session->mut);
+    return 0;
+}
+
 int sendVideoFrame(void *context, const RtspMediaFrame *frame){
     /*
      * 上游传入完整编码帧。PTS 必须一直跟随到 RTP 打包阶段，

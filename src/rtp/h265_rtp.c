@@ -1,9 +1,10 @@
 #include "rtp.h"
-int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, uint8_t *frame, uint32_t frame_size, uint32_t rtp_timestamp, int sig_0, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info)
+int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, uint8_t *frame, uint32_t frame_size, uint32_t rtp_timestamp, int sig_0, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info, RtpPacer *pacer)
 {
     uint8_t nalu_type;
     int send_bytes = 0;
     int ret;
+    uint32_t packet_bytes = 0;
 
     if(frame == NULL){
         return -1;
@@ -29,6 +30,12 @@ int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
 
     if(frame_size <= PTK_RTP_TCP_MAX){ // nalu长度小于最大包场：单一NALU单元模式
         rtp_packet->rtpHeader.marker = 1;
+        packet_bytes = RTP_HEADER_SIZE + frame_size;
+        if(tcp_header != NULL && sig_0 != -1){
+            packet_bytes += (uint32_t)sizeof(struct rtp_tcp_header);
+        }
+        /* RTP 包级 pacer 在真正写 socket 前等待，削平大帧发送突发。 */
+        rtpPacerBeforeSend(pacer, packet_bytes);
         if(tcp_header != NULL && sig_0 != -1){ // rtp over tcp
             tcp_header->rtp_len16 = (uint16_t)RTP_HEADER_SIZE + (uint16_t)frame_size;
             tcp_header->rtp_len16 = htons(tcp_header->rtp_len16);
@@ -89,6 +96,12 @@ int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
                 rtp_packet->rtpHeader.marker = 1;
             }
 
+            packet_bytes = RTP_HEADER_SIZE + PTK_RTP_TCP_MAX + 3;
+            if(tcp_header != NULL && sig_0 != -1){
+                packet_bytes += (uint32_t)sizeof(struct rtp_tcp_header);
+            }
+            /* 每个 FU 分片都是独立 RTP 包，需要逐包 pacing。 */
+            rtpPacerBeforeSend(pacer, packet_bytes);
             if(tcp_header != NULL && sig_0 != -1){
                 tcp_header->rtp_len16 = (uint16_t)RTP_HEADER_SIZE + (uint16_t)PTK_RTP_TCP_MAX + 3; // 多三个字节的FU indicator、FU header和FU payload
                 tcp_header->rtp_len16 = htons(tcp_header->rtp_len16);
@@ -105,6 +118,12 @@ int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
             rtp_packet->rtpHeader.timestamp = htonl(rtp_packet->rtpHeader.timestamp);
             rtp_packet->rtpHeader.ssrc = htonl(rtp_packet->rtpHeader.ssrc);
 
+            packet_bytes = RTP_HEADER_SIZE + remainPktSize + 3;
+            if(tcp_header != NULL && sig_0 != -1){
+                packet_bytes += (uint32_t)sizeof(struct rtp_tcp_header);
+            }
+            /* 剩余尾包同样参与 pacing，保证整帧分片节奏连续。 */
+            rtpPacerBeforeSend(pacer, packet_bytes);
             if(tcp_header != NULL && sig_0 != -1){
                 ret = sendWithTimeout(sd, (const char*)rtp_packet, RTP_HEADER_SIZE + PTK_RTP_TCP_MAX + 3, 0);
             }
@@ -140,6 +159,12 @@ int rtpSendH265Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpP
             rtp_packet->payload[2] |= 0x40; // end
             rtp_packet->rtpHeader.marker = 1;
 
+            packet_bytes = RTP_HEADER_SIZE + remainPktSize + 3;
+            if(tcp_header != NULL && sig_0 != -1){
+                packet_bytes += (uint32_t)sizeof(struct rtp_tcp_header);
+            }
+            /* 剩余尾包同样参与 pacing，保证整帧分片节奏连续。 */
+            rtpPacerBeforeSend(pacer, packet_bytes);
             if(tcp_header != NULL && sig_0 != -1){
                 tcp_header->rtp_len16 = (uint16_t)RTP_HEADER_SIZE + (uint16_t)remainPktSize + 3;
                 tcp_header->rtp_len16 = htons(tcp_header->rtp_len16);

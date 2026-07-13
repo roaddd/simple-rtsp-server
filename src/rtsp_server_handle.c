@@ -90,6 +90,9 @@ int sessionAddVideo(void *context, enum VIDEO_e type){
 int sessionAddAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels){
     return addAudio(context, type, profile, sample_rate, channels);
 }
+int rtspSetSessionVideoPacingRate(void *context, int pacing_rate_bps){
+    return setVideoPacingRate(context, pacing_rate_bps);
+}
 int sessionSendVideoFrame(void *context, const RtspMediaFrame *frame){
     return sendVideoFrame(context, frame);
 }

@@ -1,4 +1,4 @@
-#include "rtp.h"
+﻿#include "rtp.h"
 #include "logger.h"
 
 /*
@@ -79,9 +79,11 @@ static int h264_send_rtp_packet(socket_t sd,
                                 int marker,
                                 int sig_0,
                                 char *client_ip,
-                                int client_rtp_port)
+                                int client_rtp_port,
+                                RtpPacer *pacer)
 {
     int ret;
+    uint32_t packet_bytes = 0;
 
     /*
      * RTP 头字段在内存中保持主机字节序；真正发送前再转网络字节序。
@@ -90,6 +92,11 @@ static int h264_send_rtp_packet(socket_t sd,
     rtp_packet->rtpHeader.marker = marker ? 1 : 0;
     rtp_packet->rtpHeader.timestamp = rtp_timestamp;
     memcpy(rtp_packet->payload, payload, payload_size);
+    packet_bytes = RTP_HEADER_SIZE + payload_size;
+    if (tcp_header != NULL && sig_0 != -1)
+        packet_bytes += (uint32_t)sizeof(struct rtp_tcp_header);
+    /* RTP 包级 pacer 在真正写 socket 前等待，削平大帧 FU-A 分片突发。 */
+    rtpPacerBeforeSend(pacer, packet_bytes);
 
     if (tcp_header != NULL && sig_0 != -1) {
         /*
@@ -142,7 +149,8 @@ static int h264_send_nalu(socket_t sd,
                           int sig_0,
                           char *client_ip,
                           int client_rtp_port,
-                          struct RtcpPacketInfo *rtcp_info)
+                          struct RtcpPacketInfo *rtcp_info,
+                          RtpPacer *pacer)
 {
     uint8_t fu_indicator;
     uint8_t fu_header_base;
@@ -168,7 +176,8 @@ static int h264_send_nalu(socket_t sd,
                                        nalu_is_access_unit_last,
                                        sig_0,
                                        client_ip,
-                                       client_rtp_port);
+                                       client_rtp_port,
+                                       pacer);
         if (ret <= 0) {
             return -1;
         }
@@ -217,7 +226,8 @@ static int h264_send_nalu(socket_t sd,
                                    marker,
                                    sig_0,
                                    client_ip,
-                                   client_rtp_port);
+                                   client_rtp_port,
+                                   pacer);
         if (ret <= 0) {
             return -1;
         }
@@ -240,7 +250,8 @@ int rtpSendH264Frame(socket_t sd,
                      int sig_0,
                      char *client_ip,
                      int client_rtp_port,
-                     struct RtcpPacketInfo *rtcp_info)
+                     struct RtcpPacketInfo *rtcp_info,
+                     RtpPacer *pacer)
 {
     uint32_t nalu_start = 0;
     int code_len = 0;
@@ -279,7 +290,8 @@ int rtpSendH264Frame(socket_t sd,
                               sig_0,
                               client_ip,
                               client_rtp_port,
-                              rtcp_info);
+                              rtcp_info,
+                              pacer);
     }
 
     while (nalu_start < frame_size) {
@@ -310,7 +322,8 @@ int rtpSendH264Frame(socket_t sd,
                                  sig_0,
                                  client_ip,
                                  client_rtp_port,
-                                 rtcp_info);
+                                 rtcp_info,
+                                 pacer);
             if (ret <= 0) {
                 return -1;
             }
