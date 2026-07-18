@@ -1,11 +1,9 @@
-/*** 
- * @Author: huangkelong
- * @Date: 2026-03-02 23:14:35
- * @LastEditTime: 2026-05-17 17:40:40
- * @LastEditors: huangkelong
- * @Description: io事件相关接口定义
- * @FilePath: \Fork\simple-rtsp-server\src\io_event\io_event.h
- * @
+/**
+ * @file io_event.h
+ * @brief IO 事件轮询和线程唤醒接口。
+ *
+ * 本文件封装 RTSP server 内部的跨平台 socket 事件等待能力。
+ * 上层通过 io_event 注册 socket，事件线程负责等待可读/可写事件并唤醒处理逻辑。
  */
 #ifndef _IO_EVENT_H_
 #define _IO_EVENT_H_

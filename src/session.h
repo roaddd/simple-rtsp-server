@@ -34,6 +34,18 @@ enum MEDIA_e
     VIDEO = 1,
     AUDIO,
 };
+
+#ifndef RTSP_VIDEO_PACER_MODE_DEFINED
+#define RTSP_VIDEO_PACER_MODE_DEFINED
+/*
+ * RTSP session 视频 RTP pacer 开关状态。
+ * 使用枚举替代裸 int，避免调用层把开关值和 pacing rate 混用。
+ */
+typedef enum {
+    RTSP_VIDEO_PACER_DISABLED = 0, /* 关闭视频 RTP 包级 pacer。 */
+    RTSP_VIDEO_PACER_ENABLED = 1   /* 开启视频 RTP 包级 pacer。 */
+} RtspVideoPacerMode;
+#endif
 struct MediaPacket_st
 {
     char data[2 * 1024 * 1024];
@@ -156,7 +168,8 @@ struct session_st
     int profile;
     int sample_rate;
     int channels;
-    int video_pacing_rate_bps;         /* 当前 session 的视频 RTP pacing 目标码率，<=0 表示关闭。 */
+    RtspVideoPacerMode video_pacer_mode; /* 当前 session 是否启用视频 RTP 包级 pacer。 */
+    int video_pacing_rate_bps;         /* 当前 session 的视频 RTP pacing 目标码率，单位 bit/s。 */
 };
 #ifdef RTSP_FILE_SERVER
 /**
@@ -239,12 +252,13 @@ int addVideo(void *context, enum VIDEO_e type);
  */
 int addAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels);
 /**
- * 设置自定义 session 的视频 RTP 包级 pacing 码率。
+ * 设置自定义 session 的视频 RTP 包级 pacer。
  * @param context addCustomSession 返回的 session 指针。
- * @param pacing_rate_bps 目标码率，单位 bit/s；<=0 表示关闭 pacing。
+ * @param mode pacer 开关状态。
+ * @param pacing_rate_bps 目标码率，单位 bit/s；mode 为 RTSP_VIDEO_PACER_ENABLED 时必须大于 0。
  * @return 0:ok <0:error
  */
-int setVideoPacingRate(void *context, int pacing_rate_bps);
+int setVideoPacer(void *context, RtspVideoPacerMode mode, int pacing_rate_bps);
 /**
  * 发送一帧编码视频。H264 Annex-B 帧在 RTSP server 内部拆成 RTP NALU/FU-A 包，
  * 并使用 frame->pts_us 作为 RTP timestamp 的换算基准。

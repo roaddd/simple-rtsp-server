@@ -1017,7 +1017,10 @@ int createClient(struct clientinfo_st *clientinfo,
     rtpHeaderInit(clientinfo->rtp_packet_1, 0, 0, 0, RTP_VESION, getSessionAudioType(clientinfo->session) == AUDIO_AAC ? RTP_PAYLOAD_TYPE_AAC : RTP_PAYLOAD_TYPE_PCMA, 0, 0, 0, audio_ssrc);
 
     clientinfo->tcp_header = malloc(sizeof(struct rtp_tcp_header));
-    rtpPacerSetRate(&clientinfo->video_pacer, clientinfo->session->video_pacing_rate_bps);
+    rtpPacerSetRate(&clientinfo->video_pacer,
+                    clientinfo->session->video_pacer_mode == RTSP_VIDEO_PACER_ENABLED ?
+                        clientinfo->session->video_pacing_rate_bps :
+                        0);
 
     clientinfo->packet_list = (struct MediaPacket_st *)malloc((RING_BUFFER_MAX / 4) * sizeof(struct MediaPacket_st));
     clientinfo->packet_list_size = RING_BUFFER_MAX / 4;
@@ -1343,27 +1346,40 @@ int addAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int
     return 0;
 }
 
-int setVideoPacingRate(void *context, int pacing_rate_bps){
+/*
+ * 设置自定义 session 的视频 RTP 包级 pacer。
+ * session 只保存开关和实际生效码率；每个客户端维护独立 pacer 发送节奏。
+ */
+int setVideoPacer(void *context, RtspVideoPacerMode mode, int pacing_rate_bps){
     struct session_st *session = NULL;
+    int effective_rate_bps = 0;
     int i = 0;
 
     if(context == NULL){
+        LOG_ERROR("[rtspServer] setVideoPacer failed, context is NULL");
         return -1;
     }
-    session = (struct session_st *)context;
-    if(pacing_rate_bps < 0){
-        pacing_rate_bps = 0;
+    if(mode != RTSP_VIDEO_PACER_DISABLED && mode != RTSP_VIDEO_PACER_ENABLED){
+        LOG_ERROR("[rtspServer] setVideoPacer failed, invalid pacer mode");
+        return -1;
+    }
+    if(mode == RTSP_VIDEO_PACER_ENABLED && pacing_rate_bps <= 0){
+        LOG_ERROR("[rtspServer] setVideoPacer failed, invalid pacing rate");
+        return -1;
     }
 
+    session = (struct session_st *)context;
+    effective_rate_bps = (mode == RTSP_VIDEO_PACER_ENABLED) ? pacing_rate_bps : 0;
     mthread_mutex_lock(&session->mut);
-    session->video_pacing_rate_bps = pacing_rate_bps;
+    session->video_pacer_mode = mode;
+    session->video_pacing_rate_bps = effective_rate_bps;
     for(i = 0; i < CLIENTMAX; i++){
         if(session->clientinfo[i].sd != INVALID_SOCKET){
             /*
              * 每个客户端有独立 pacer 状态。运行期调整 session 目标码率时，
              * 只同步目标码率，不共享发送时间，避免多个客户端互相影响。
              */
-            rtpPacerSetRate(&session->clientinfo[i].video_pacer, pacing_rate_bps);
+            rtpPacerSetRate(&session->clientinfo[i].video_pacer, effective_rate_bps);
         }
     }
     mthread_mutex_unlock(&session->mut);

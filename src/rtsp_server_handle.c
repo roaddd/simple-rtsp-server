@@ -90,8 +90,12 @@ int sessionAddVideo(void *context, enum VIDEO_e type){
 int sessionAddAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int channels){
     return addAudio(context, type, profile, sample_rate, channels);
 }
-int rtspSetSessionVideoPacingRate(void *context, int pacing_rate_bps){
-    return setVideoPacingRate(context, pacing_rate_bps);
+/*
+ * 设置指定 RTSP session 的视频 RTP pacer。
+ * mode 为关闭时，session 内部会把实际 pacing 速率归零。
+ */
+int rtspSetSessionVideoPacer(void *context, RtspVideoPacerMode mode, int pacing_rate_bps){
+    return setVideoPacer(context, mode, pacing_rate_bps);
 }
 int sessionSendVideoFrame(void *context, const RtspMediaFrame *frame){
     return sendVideoFrame(context, frame);
