@@ -97,6 +97,9 @@ int sessionAddAudio(void *context, enum AUDIO_e type, int profile, int sample_ra
 int rtspSetSessionVideoPacer(void *context, RtspVideoPacerMode mode, int pacing_rate_bps){
     return setVideoPacer(context, mode, pacing_rate_bps);
 }
+int rtspGetSessionVideoPacerStats(void *context, RtspVideoPacerStats *stats){
+    return getVideoPacerStats(context, stats);
+}
 int sessionSendVideoFrame(void *context, const RtspMediaFrame *frame){
     return sendVideoFrame(context, frame);
 }

@@ -1386,6 +1386,59 @@ int setVideoPacer(void *context, RtspVideoPacerMode mode, int pacing_rate_bps){
     return 0;
 }
 
+/*
+ * 获取指定 session 的视频 RTP pacer 调试统计。
+ * 只填充前 RTSP_VIDEO_PACER_STATS_MAX_CLIENTS 个活跃客户端，避免 shell 输出过长。
+ */
+int getVideoPacerStats(void *context, RtspVideoPacerStats *stats){
+    struct session_st *session = NULL;
+    RtpPacerStats pacer_stats = {0};
+    int i = 0;
+    int reported = 0;
+
+    if(context == NULL || stats == NULL){
+        LOG_ERROR("[rtspServer] getVideoPacerStats failed, context=%p stats=%p",
+                  context,
+                  (void *)stats);
+        return -1;
+    }
+
+    session = (struct session_st *)context;
+    memset(stats, 0, sizeof(*stats));
+    mthread_mutex_lock(&session->mut);
+    stats->mode = session->video_pacer_mode;
+    stats->pacing_rate_bps = session->video_pacing_rate_bps;
+    stats->total_client_count = session->count;
+    for(i = 0; i < CLIENTMAX && reported < RTSP_VIDEO_PACER_STATS_MAX_CLIENTS; i++){
+        if(session->clientinfo[i].sd == INVALID_SOCKET){
+            continue;
+        }
+        memset(&pacer_stats, 0, sizeof(pacer_stats));
+        rtpPacerGetStats(&session->clientinfo[i].video_pacer, &pacer_stats);
+        stats->clients[reported].in_use = 1;
+        snprintf(stats->clients[reported].client_ip,
+                 sizeof(stats->clients[reported].client_ip),
+                 "%s",
+                 session->clientinfo[i].client_ip);
+        stats->clients[reported].client_rtp_port = session->clientinfo[i].client_rtp_port;
+        stats->clients[reported].transport = session->clientinfo[i].transport;
+        stats->clients[reported].rate_bps = pacer_stats.rate_bps;
+        stats->clients[reported].packet_count = pacer_stats.packet_count;
+        stats->clients[reported].byte_count = pacer_stats.byte_count;
+        stats->clients[reported].sleep_count = pacer_stats.sleep_count;
+        stats->clients[reported].total_sleep_us = pacer_stats.total_sleep_us;
+        stats->clients[reported].last_packet_bytes = pacer_stats.last_packet_bytes;
+        stats->clients[reported].last_sleep_us = pacer_stats.last_sleep_us;
+        stats->clients[reported].last_interval_us = pacer_stats.last_interval_us;
+        stats->clients[reported].last_window_bps = pacer_stats.last_window_bps;
+        stats->clients[reported].max_window_bps = pacer_stats.max_window_bps;
+        reported++;
+    }
+    stats->reported_client_count = reported;
+    mthread_mutex_unlock(&session->mut);
+    return 0;
+}
+
 int sendVideoFrame(void *context, const RtspMediaFrame *frame){
     /*
      * 上游传入完整编码帧。PTS 必须一直跟随到 RTP 打包阶段，

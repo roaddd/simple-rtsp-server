@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #define RTP_PACER_MAX_SLEEP_US 200000U
+#define RTP_PACER_STATS_WINDOW_US 100000U
 
 /**
  * @description: 获取 RTP pacer 使用的单调时钟，单位微秒。
@@ -41,6 +42,7 @@ void rtpPacerSetRate(RtpPacer *pacer, int rate_bps)
     {
         pacer->rate_bps = 0;
         pacer->next_send_ts_us = 0;
+        pacer->stats.rate_bps = 0;
         return;
     }
     if (pacer->rate_bps != rate_bps)
@@ -52,6 +54,58 @@ void rtpPacerSetRate(RtpPacer *pacer, int rate_bps)
         pacer->next_send_ts_us = rtp_pacer_now_us();
     }
     pacer->rate_bps = rate_bps;
+    pacer->stats.rate_bps = rate_bps;
+}
+
+/**
+ * @description: 更新 RTP pacer 100ms 统计窗口。
+ */
+static void rtp_pacer_update_stats(RtpPacer *pacer,
+                                   uint32_t packet_bytes,
+                                   uint32_t sleep_us,
+                                   uint32_t packet_interval_us,
+                                   uint64_t send_ts_us)
+{
+    uint64_t elapsed_us = 0;
+    uint64_t window_bps = 0;
+
+    if (!pacer)
+        return;
+
+    if (pacer->stats.window_start_ts_us == 0)
+        pacer->stats.window_start_ts_us = send_ts_us;
+
+    elapsed_us = send_ts_us >= pacer->stats.window_start_ts_us ?
+                 send_ts_us - pacer->stats.window_start_ts_us :
+                 0;
+    if (elapsed_us >= RTP_PACER_STATS_WINDOW_US)
+    {
+        if (elapsed_us > 0)
+        {
+            window_bps = pacer->stats.window_bytes * 8ULL * 1000000ULL / elapsed_us;
+            pacer->stats.last_window_bps = window_bps;
+            if (window_bps > pacer->stats.max_window_bps)
+                pacer->stats.max_window_bps = window_bps;
+        }
+        pacer->stats.window_start_ts_us = send_ts_us;
+        pacer->stats.window_bytes = 0;
+        pacer->stats.window_packets = 0;
+    }
+
+    pacer->stats.rate_bps = pacer->rate_bps;
+    pacer->stats.packet_count++;
+    pacer->stats.byte_count += packet_bytes;
+    if (sleep_us > 0)
+    {
+        pacer->stats.sleep_count++;
+        pacer->stats.total_sleep_us += sleep_us;
+    }
+    pacer->stats.last_packet_bytes = packet_bytes;
+    pacer->stats.last_sleep_us = sleep_us;
+    pacer->stats.last_interval_us = packet_interval_us;
+    pacer->stats.last_send_ts_us = send_ts_us;
+    pacer->stats.window_bytes += packet_bytes;
+    pacer->stats.window_packets++;
 }
 
 /**
@@ -64,6 +118,7 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
     uint64_t now_us = 0;
     uint64_t sleep_us = 0;
     uint64_t packet_interval_us = 0;
+    uint32_t actual_sleep_us = 0;
 
     if (!pacer || pacer->rate_bps <= 0 || packet_bytes == 0)
         return;
@@ -77,6 +132,7 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
         sleep_us = pacer->next_send_ts_us - now_us;
         if (sleep_us > RTP_PACER_MAX_SLEEP_US)
             sleep_us = RTP_PACER_MAX_SLEEP_US;
+        actual_sleep_us = (uint32_t)sleep_us;
         usleep((useconds_t)sleep_us);  /* TODO:不用sleep的方案？ */
         now_us = rtp_pacer_now_us();
         if (pacer->next_send_ts_us < now_us)
@@ -93,4 +149,19 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
     if (packet_interval_us == 0)
         packet_interval_us = 1;
     pacer->next_send_ts_us += packet_interval_us;
+    rtp_pacer_update_stats(pacer,
+                           packet_bytes,
+                           actual_sleep_us,
+                           (uint32_t)packet_interval_us,
+                           now_us);
+}
+
+/**
+ * @description: 读取 RTP pacer 调试统计快照。
+ */
+void rtpPacerGetStats(RtpPacer *pacer, RtpPacerStats *stats)
+{
+    if (!pacer || !stats)
+        return;
+    *stats = pacer->stats;
 }

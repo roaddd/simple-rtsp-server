@@ -16,7 +16,25 @@ struct RtcpPacketInfo
     uint64_t wallclock_ms;
 };
 
+typedef struct RtpPacerStats {
+    int rate_bps;                  /* 当前 pacer 目标码率，单位 bit/s。 */
+    uint64_t packet_count;         /* pacer 观察到的视频 RTP 包数量。 */
+    uint64_t byte_count;           /* pacer 观察到的视频 RTP 包字节数。 */
+    uint64_t sleep_count;          /* pacer 实际 sleep 的次数。 */
+    uint64_t total_sleep_us;       /* pacer 累计 sleep 时间。 */
+    uint32_t last_packet_bytes;    /* 最近一次视频 RTP 包字节数。 */
+    uint32_t last_sleep_us;        /* 最近一次发送前 sleep 时间。 */
+    uint32_t last_interval_us;     /* 最近一次按包大小计算出的发送间隔。 */
+    uint64_t last_send_ts_us;      /* 最近一次允许发送的单调时间。 */
+    uint64_t window_start_ts_us;   /* 当前 100ms 统计窗口起始时间。 */
+    uint64_t window_bytes;         /* 当前 100ms 统计窗口内 RTP 字节数。 */
+    uint32_t window_packets;       /* 当前 100ms 统计窗口内 RTP 包数。 */
+    uint64_t last_window_bps;      /* 最近完成的 100ms 窗口估算发送码率。 */
+    uint64_t max_window_bps;       /* pacer 启用以来观察到的最大 100ms 窗口码率。 */
+} RtpPacerStats;
+
 typedef struct RtpPacer {
+    RtpPacerStats stats;           /* RTP pacer 调试统计，用于排查是否真正平滑发送。 */
     int rate_bps;                  /* RTP 视频包 pacing 目标码率，<=0 表示关闭 pacing。 */
     uint64_t next_send_ts_us;      /* 下一 RTP 包允许发送的单调时钟时间，单位微秒。 */
     /* pacing 只依赖单调时钟，避免系统 RTC 校时导致发送间隔突然跳变。 */
@@ -41,6 +59,7 @@ void rtpPacerSetRate(RtpPacer *pacer, int rate_bps);
  * @param packet_bytes 本次 RTP 包的网络侧字节数，包含 RTP 头和 payload。
  */
 void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes);
+void rtpPacerGetStats(RtpPacer *pacer, RtpPacerStats *stats);
 
 int rtpSendH264Frame(socket_t sd, struct rtp_tcp_header *tcp_header, struct RtpPacket *rtp_packet, 
                     uint8_t *frame, uint32_t frame_size, uint32_t rtp_timestamp, int sig_0, char *client_ip, int client_rtp_port, struct RtcpPacketInfo *rtcp_info, RtpPacer *pacer);

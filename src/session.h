@@ -46,6 +46,35 @@ typedef enum {
     RTSP_VIDEO_PACER_ENABLED = 1   /* 开启视频 RTP 包级 pacer。 */
 } RtspVideoPacerMode;
 #endif
+
+#ifndef RTSP_VIDEO_PACER_STATS_DEFINED
+#define RTSP_VIDEO_PACER_STATS_DEFINED
+#define RTSP_VIDEO_PACER_STATS_MAX_CLIENTS 16
+typedef struct {
+    int in_use;                    /* 客户端槽位是否正在使用。 */
+    char client_ip[40];            /* 客户端 IP。 */
+    int client_rtp_port;           /* 客户端视频 RTP 端口。 */
+    int transport;                 /* RTSP transport 类型。 */
+    int rate_bps;                  /* 当前客户端 pacer 目标码率。 */
+    uint64_t packet_count;         /* pacer 观察到的视频 RTP 包数量。 */
+    uint64_t byte_count;           /* pacer 观察到的视频 RTP 字节数。 */
+    uint64_t sleep_count;          /* pacer 实际 sleep 次数。 */
+    uint64_t total_sleep_us;       /* pacer 累计 sleep 时间。 */
+    uint32_t last_packet_bytes;    /* 最近一次 RTP 包字节数。 */
+    uint32_t last_sleep_us;        /* 最近一次 sleep 时间。 */
+    uint32_t last_interval_us;     /* 最近一次按 rate 计算的发送间隔。 */
+    uint64_t last_window_bps;      /* 最近完成的 100ms 窗口估算码率。 */
+    uint64_t max_window_bps;       /* 已观察到的最大 100ms 窗口估算码率。 */
+} RtspVideoPacerClientStats;
+
+typedef struct {
+    RtspVideoPacerMode mode;       /* 当前 session pacer 开关。 */
+    int pacing_rate_bps;           /* 当前 session 目标 pacing rate。 */
+    int total_client_count;        /* 当前 session 总客户端数量。 */
+    int reported_client_count;     /* 本快照实际填充的客户端数量。 */
+    RtspVideoPacerClientStats clients[RTSP_VIDEO_PACER_STATS_MAX_CLIENTS];
+} RtspVideoPacerStats;
+#endif
 struct MediaPacket_st
 {
     char data[2 * 1024 * 1024];
@@ -259,6 +288,7 @@ int addAudio(void *context, enum AUDIO_e type, int profile, int sample_rate, int
  * @return 0:ok <0:error
  */
 int setVideoPacer(void *context, RtspVideoPacerMode mode, int pacing_rate_bps);
+int getVideoPacerStats(void *context, RtspVideoPacerStats *stats);
 /**
  * 发送一帧编码视频。H264 Annex-B 帧在 RTSP server 内部拆成 RTP NALU/FU-A 包，
  * 并使用 frame->pts_us 作为 RTP timestamp 的换算基准。
