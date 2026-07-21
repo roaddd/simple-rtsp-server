@@ -1432,6 +1432,15 @@ int getVideoPacerStats(void *context, RtspVideoPacerStats *stats){
         stats->clients[reported].last_interval_us = pacer_stats.last_interval_us;
         stats->clients[reported].last_window_bps = pacer_stats.last_window_bps;
         stats->clients[reported].max_window_bps = pacer_stats.max_window_bps;
+        stats->clients[reported].current_window_bps = pacer_stats.current_window_bps;
+        stats->clients[reported].last_window_bytes = pacer_stats.last_window_bytes;
+        stats->clients[reported].last_window_packets = pacer_stats.last_window_packets;
+        stats->clients[reported].last_window_elapsed_us = pacer_stats.last_window_elapsed_us;
+        stats->clients[reported].max_window_bytes = pacer_stats.max_window_bytes;
+        stats->clients[reported].max_window_packets = pacer_stats.max_window_packets;
+        stats->clients[reported].max_window_elapsed_us = pacer_stats.max_window_elapsed_us;
+        stats->clients[reported].reset_count = pacer_stats.reset_count;
+        stats->clients[reported].last_reset_reason = pacer_stats.last_reset_reason;
         reported++;
     }
     stats->reported_client_count = reported;

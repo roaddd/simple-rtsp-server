@@ -14,7 +14,7 @@ static uint64_t rtp_pacer_now_us(void)
 {
     struct timespec ts = {0};
 
-    clock_gettime(CLOCK_MONOTONIC, &ts); /* 不会受系统时间校时影响 */
+    clock_gettime(CLOCK_MONOTONIC, &ts); /* 单调时钟不受系统时间校时影响。 */
     return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)ts.tv_nsec / 1000ULL;
 }
 
@@ -30,35 +30,42 @@ void rtpPacerInit(RtpPacer *pacer)
 }
 
 /**
- * @description: 设置 RTP pacer 目标码率，码率变化时重置发送基准时间。
+ * @description: 设置 RTP pacer 目标发送码率。
  * @param pacer 每个客户端独立持有的 pacer 状态。
  * @param rate_bps 目标发送码率，单位 bit/s，<=0 表示关闭 pacing。
  */
 void rtpPacerSetRate(RtpPacer *pacer, int rate_bps)
 {
     if (!pacer)
+    {
+        LOG_ERROR("rtpPacerSetRate: pacer is null");
         return;
+    }
+
     if (rate_bps <= 0)
     {
+        LOG_ERROR("rtpPacerSetRate: rate_bps is <= 0");
         pacer->rate_bps = 0;
         pacer->next_send_ts_us = 0;
         pacer->stats.rate_bps = 0;
         return;
     }
-    if (pacer->rate_bps != rate_bps)
-    {
-        /*
-         * 码率变化时从当前时间重新起步，避免沿用旧码率下积累的发送时间导致
-         * 第一个包被异常延迟。
-         */
-        pacer->next_send_ts_us = rtp_pacer_now_us();
-    }
+
+    /*
+     * 码率变化时不重置 next_send_ts_us。
+     * 如果直接用当前时间重新起步，下一包可能绕过旧时间基准立即发送，反而制造一次突发。
+     */
     pacer->rate_bps = rate_bps;
     pacer->stats.rate_bps = rate_bps;
 }
 
 /**
- * @description: 更新 RTP pacer 100ms 统计窗口。
+ * @description: 更新 RTP pacer 100ms 发送统计窗口。
+ * @param pacer 每个客户端独立持有的 pacer 状态。
+ * @param packet_bytes 本次 RTP 包字节数。
+ * @param sleep_us 本次发送前实际等待的微秒数。
+ * @param packet_interval_us 按当前 pacing rate 计算出的本包发送间隔。
+ * @param send_ts_us 本次实际发送前的时间戳。
  */
 static void rtp_pacer_update_stats(RtpPacer *pacer,
                                    uint32_t packet_bytes,
@@ -80,12 +87,24 @@ static void rtp_pacer_update_stats(RtpPacer *pacer,
                  0;
     if (elapsed_us >= RTP_PACER_STATS_WINDOW_US)
     {
+        /*
+         * 完成窗口用真实 elapsed_us 计算，而不是固定除以 100ms。
+         * 这样可以判断 9Mbps 峰值到底是窗口统计偏差，还是 pacer 确实放出了更多字节。
+         */
         if (elapsed_us > 0)
         {
             window_bps = pacer->stats.window_bytes * 8ULL * 1000000ULL / elapsed_us;
             pacer->stats.last_window_bps = window_bps;
+            pacer->stats.last_window_bytes = pacer->stats.window_bytes;
+            pacer->stats.last_window_packets = pacer->stats.window_packets;
+            pacer->stats.last_window_elapsed_us = elapsed_us;
             if (window_bps > pacer->stats.max_window_bps)
+            {
                 pacer->stats.max_window_bps = window_bps;
+                pacer->stats.max_window_bytes = pacer->stats.window_bytes;
+                pacer->stats.max_window_packets = pacer->stats.window_packets;
+                pacer->stats.max_window_elapsed_us = elapsed_us;
+            }
         }
         pacer->stats.window_start_ts_us = send_ts_us;
         pacer->stats.window_bytes = 0;
@@ -106,6 +125,12 @@ static void rtp_pacer_update_stats(RtpPacer *pacer,
     pacer->stats.last_send_ts_us = send_ts_us;
     pacer->stats.window_bytes += packet_bytes;
     pacer->stats.window_packets++;
+
+    elapsed_us = send_ts_us >= pacer->stats.window_start_ts_us ?
+                 send_ts_us - pacer->stats.window_start_ts_us :
+                 0;
+    if (elapsed_us > 0)
+        pacer->stats.current_window_bps = pacer->stats.window_bytes * 8ULL * 1000000ULL / elapsed_us;
 }
 
 /**
@@ -124,8 +149,22 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
         return;
 
     now_us = rtp_pacer_now_us();
-    if (pacer->next_send_ts_us == 0 || pacer->next_send_ts_us + RTP_PACER_MAX_SLEEP_US < now_us)
+    if (pacer->next_send_ts_us == 0)
+    {
         pacer->next_send_ts_us = now_us;
+        pacer->stats.reset_count++;
+        pacer->stats.last_reset_reason = 1; /* 首包或 pacer 被重新打开。 */
+    }
+    else if (pacer->next_send_ts_us + RTP_PACER_MAX_SLEEP_US < now_us)
+    {
+        /*
+         * 发送线程已经明显落后于计划时间，继续追旧时间没有意义。
+         * 这里重置时间基准，并记录原因，用于排查是否因为重置导致瞬时突发。
+         */
+        pacer->next_send_ts_us = now_us;
+        pacer->stats.reset_count++;
+        pacer->stats.last_reset_reason = 2; /* 落后超过保护阈值。 */
+    }
 
     if (pacer->next_send_ts_us > now_us)
     {
@@ -133,7 +172,7 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
         if (sleep_us > RTP_PACER_MAX_SLEEP_US)
             sleep_us = RTP_PACER_MAX_SLEEP_US;
         actual_sleep_us = (uint32_t)sleep_us;
-        usleep((useconds_t)sleep_us);  /* TODO:不用sleep的方案？ */
+        usleep((useconds_t)sleep_us); /* 当前实现依赖系统 sleep 调度，后续可替换为令牌桶。 */
         now_us = rtp_pacer_now_us();
         if (pacer->next_send_ts_us < now_us)
             pacer->next_send_ts_us = now_us;
@@ -158,6 +197,8 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
 
 /**
  * @description: 读取 RTP pacer 调试统计快照。
+ * @param pacer 每个客户端独立持有的 pacer 状态。
+ * @param stats 输出 pacer 调试统计快照。
  */
 void rtpPacerGetStats(RtpPacer *pacer, RtpPacerStats *stats)
 {
