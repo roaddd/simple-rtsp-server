@@ -38,13 +38,11 @@ void rtpPacerSetRate(RtpPacer *pacer, int rate_bps)
 {
     if (!pacer)
     {
-        LOG_ERROR("rtpPacerSetRate: pacer is null");
         return;
     }
 
     if (rate_bps <= 0)
     {
-        LOG_ERROR("rtpPacerSetRate: rate_bps is <= 0");
         pacer->rate_bps = 0;
         pacer->next_send_ts_us = 0;
         pacer->stats.rate_bps = 0;
@@ -154,6 +152,11 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
         pacer->next_send_ts_us = now_us;
         pacer->stats.reset_count++;
         pacer->stats.last_reset_reason = 1; /* 首包或 pacer 被重新打开。 */
+        pacer->stats.last_reset_lag_us = 0;
+        pacer->stats.last_reset_now_us = now_us;
+        pacer->stats.last_reset_next_send_ts_us = now_us;
+        pacer->stats.last_reset_window_bytes = pacer->stats.window_bytes;
+        pacer->stats.last_reset_window_packets = pacer->stats.window_packets;
     }
     else if (pacer->next_send_ts_us + RTP_PACER_MAX_SLEEP_US < now_us)
     {
@@ -161,6 +164,11 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
          * 发送线程已经明显落后于计划时间，继续追旧时间没有意义。
          * 这里重置时间基准，并记录原因，用于排查是否因为重置导致瞬时突发。
          */
+        pacer->stats.last_reset_lag_us = now_us - pacer->next_send_ts_us;
+        pacer->stats.last_reset_now_us = now_us;
+        pacer->stats.last_reset_next_send_ts_us = pacer->next_send_ts_us;
+        pacer->stats.last_reset_window_bytes = pacer->stats.window_bytes;
+        pacer->stats.last_reset_window_packets = pacer->stats.window_packets;
         pacer->next_send_ts_us = now_us;
         pacer->stats.reset_count++;
         pacer->stats.last_reset_reason = 2; /* 落后超过保护阈值。 */
