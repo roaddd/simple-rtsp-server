@@ -36,14 +36,18 @@ void rtpPacerInit(RtpPacer *pacer)
  */
 void rtpPacerSetRate(RtpPacer *pacer, int rate_bps)
 {
+    uint64_t next_send_ts_us = 0;
+
     if (!pacer)
     {
         return;
     }
 
+    next_send_ts_us = pacer->next_send_ts_us;
     if (rate_bps <= 0)
     {
         pacer->rate_bps = 0;
+        memset(&pacer->stats, 0, sizeof(pacer->stats));
         pacer->next_send_ts_us = 0;
         pacer->stats.rate_bps = 0;
         return;
@@ -52,8 +56,12 @@ void rtpPacerSetRate(RtpPacer *pacer, int rate_bps)
     /*
      * 码率变化时不重置 next_send_ts_us。
      * 如果直接用当前时间重新起步，下一包可能绕过旧时间基准立即发送，反而制造一次突发。
+     * 统计窗口需要清空，保证 getRtpRate/getPacer 看到的是当前开关和当前 rate 下的数据。
      */
+    if (pacer->rate_bps != rate_bps)
+        memset(&pacer->stats, 0, sizeof(pacer->stats));
     pacer->rate_bps = rate_bps;
+    pacer->next_send_ts_us = next_send_ts_us;
     pacer->stats.rate_bps = rate_bps;
 }
 
@@ -143,10 +151,20 @@ void rtpPacerBeforeSend(RtpPacer *pacer, uint32_t packet_bytes)
     uint64_t packet_interval_us = 0;
     uint32_t actual_sleep_us = 0;
 
-    if (!pacer || pacer->rate_bps <= 0 || packet_bytes == 0)
+    if (!pacer || packet_bytes == 0)
         return;
 
     now_us = rtp_pacer_now_us();
+    if (pacer->rate_bps <= 0)
+    {
+        /*
+         * pacer 关闭时不做发送等待，但仍统计 RTP 包窗口码率。
+         * 这样可以和 pacer 开启后的 100ms 峰值直接对比。
+         */
+        rtp_pacer_update_stats(pacer, packet_bytes, 0, 0, now_us);
+        return;
+    }
+
     if (pacer->next_send_ts_us == 0)
     {
         pacer->next_send_ts_us = now_us;
